@@ -1,0 +1,51 @@
+{
+  "versions": {
+    "profile": "experimental_traits_v2",
+    "knowledge": "personal_space_v1",
+    "observation": "occluded_perception_v1",
+    "decision": "private_strategy_v2"
+  },
+  "profile_classification": {
+    "default_method": "keyword_candidates",
+    "full_persona": {
+      "version": "full_persona_traits_v1",
+      "prompt_version": "full_persona_prompt_v1",
+      "num_ctx": 16384,
+      "max_output_tokens": 2048,
+      "max_validation_attempts": 3,
+      "evidence_levels": ["direct", "contextual", "hypothesis"]
+    }
+  },
+  "experiment_seed": 20261027,
+  "fallback_distribution": {"low": 0.25, "normal": 0.5, "high": 0.25},
+  "sensor": {
+    "range_m": 18.0,
+    "grid_m": 2.0,
+    "smoke_contrast_budget": 3.0,
+    "ray_sample_spacing_m": 3.0,
+    "refresh_s": 1.0,
+    "current_observation_ttl_s": 3.0
+  },
+  "decision": {
+    "routine_minimum_interval_s": 15.0,
+    "routine_maximum_calls_per_person": 6,
+    "critical_changes_bypass_limits": true,
+    "queue_increase_s": 5.0,
+    "stalled_s": 6.0
+  },
+  "trait_parameters": {
+    "crowd_seconds": {"low": 0, "normal": 12, "high": 36},
+    "patience_seconds": {"low": 3, "normal": 8, "high": 16},
+    "risk_multiplier": {"low": 1, "normal": 2, "high": 4},
+    "exploration_bonus": {"low": 2, "normal": 6, "high": 12}
+  },
+  "assumptions": [
+    "4개 성향은 실험용 가정이며 실제 성격·위기 대응 능력의 측정값이 아닙니다.",
+    "관련 원문은 Qwen이 해석합니다. 근거 없음은 낮음 25%·보통 50%·높음 25%의 독립 분포에서 UUID·실험 시드·성향명으로 배정합니다.",
+    "시야는 최대 18m의 전방향 관측, 벽·기둥·층 분리와 FDS 연기 감쇠로 제한합니다. 생리학적으로 보정한 지각 모델은 아닙니다.",
+    "온도·소광계수의 정확한 수치는 물리 계산에만 사용하고 판단에는 보이는 연기와 체감 열의 단계 표현을 사용합니다.",
+    "본 모델에 위치와 내용이 정의된 안내 표지만 관측하며 화면의 설명용 층·출구 라벨은 안내 표지로 간주하지 않습니다.",
+    "서울 강서구의 거주 정보는 제한적인 과거 구조 지식의 대리지표이며 역까지의 거리나 실제 이용 경험을 뜻하지 않습니다.",
+    "실험 성향 정책에서는 낮은 대기 인내와 높은 탐색 적극성이 추월 의도를 허용합니다. 기존 원문의 급함 판정은 비교 가능한 원문 기록으로 보존하고 새 실험 정책의 필수 조건으로 사용하지 않습니다. 실행은 기존 상대속도·공간·충돌 조건으로 제한합니다."
+  ]
+}

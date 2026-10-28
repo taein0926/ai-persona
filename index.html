@@ -1,75 +1,64 @@
 <!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI Persona · 재난 인파 예측</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Persona Evacuation Lab</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css" />
-  <link rel="stylesheet" href="overrides.css" />
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="overrides.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">◈</span><span>RAIL SAFE</span><small>AI PERSONA DIGITAL TWIN</small></div>
-    <div class="incident"><span class="pulse"></span> INCIDENT ACTIVE <b>FIRE / CONCOURSE B</b></div>
-    <div class="clock" id="clock">SIM TIME 00:00</div>
+    <div class="brand"><span>◈</span> PERSONA EVAC LAB <small>REPRODUCIBLE MVP</small></div>
+    <div class="run-meta"><i></i><span id="experiment">실험 로딩 중</span></div>
+    <div class="clock" id="clock">SIM 00:00.0</div>
   </header>
-
-  <main class="dashboard">
-    <aside class="panel personas">
-      <div class="panel-title"><span>01</span> AI 페르소나 구성</div>
-      <p class="muted">승객 행동 비율을 조정하세요.</p>
-      <div class="persona-list">
-        <label class="persona normal"><span class="persona-icon">●</span><span><b>일반 승객</b><small>최단 출구 이동</small></span><input class="percentage" id="normalOut" type="number" min="0" max="100" value="45"><input id="normal" type="range" min="0" max="100" value="45"></label>
-        <label class="persona follower"><span class="persona-icon">●●</span><span><b>추종형</b><small>군중 경로 선택</small></span><input class="percentage" id="followerOut" type="number" min="0" max="100" value="30"><input id="follower" type="range" min="0" max="100" value="30"></label>
-        <label class="persona anxious"><span class="persona-icon">◆</span><span><b>불안형</b><small>위험·혼잡 회피</small></span><input class="percentage" id="anxiousOut" type="number" min="0" max="100" value="15"><input id="anxious" type="range" min="0" max="100" value="15"></label>
-        <label class="persona delayed"><span class="persona-icon">▲</span><span><b>지연형</b><small>대피 시작 지연</small></span><input class="percentage" id="delayedOut" type="number" min="0" max="100" value="10"><input id="delayed" type="range" min="0" max="100" value="10"></label>
+  <main>
+    <aside class="panel left-panel">
+      <div class="panel-title"><span>01</span> ACTUAL MVP RUN</div>
+      <p class="muted">10명의 고유 Persona가 실제 JuPedSim Agent ID와 일대일 결합됩니다.</p>
+      <div class="variant-tabs" id="variantTabs">
+        <button class="active" data-variant="C">MVP <small>PERSONA + FDS</small></button>
       </div>
-      <div class="total"><span>합계</span><b id="total">100%</b></div>
-      <button id="simulate" class="simulate"><span>▶</span> AI 페르소나 적용 및 시뮬레이션</button>
-      <button id="reset" class="reset">기본값으로 되돌리기</button>
-      <div class="legend"><i class="green"></i>낮음 <i class="yellow"></i>보통 <i class="orange"></i>높음 <i class="red"></i>위험</div>
+      <div class="summary" id="summary"></div>
+      <div class="hash-card"><span>ASSIGNMENT HASH</span><code id="assignmentHash">—</code></div>
+      <div class="notice" id="backendNotice"></div>
     </aside>
-
-    <section class="map-panel">
-      <div class="map-heading"><div><span class="eyebrow">STATION DIGITAL TWIN</span><h1>인천 센트럴역 · 대합실 B</h1></div></div>
-      <div class="station-wrap">
-        <div class="station" id="station">
-          <div class="grid"></div><div class="level-label b1">B1 · 대합실 층</div><div class="level-label b2">B2 · 승강장 층</div>
-          <div class="zone zone-a"><b>A</b><span>대합실</span></div>
-          <div class="zone zone-b"><b>B</b><span>환승 통로</span></div>
-          <div class="zone zone-c"><b>C</b><span>승강장</span></div>
-          <div class="platform p1">PLATFORM 1</div><div class="platform p2">PLATFORM 2</div><div class="stairs s1">▨<small>계단 / 에스컬레이터</small></div><div class="stairs s2">▨<small>계단 / 에스컬레이터</small></div>
-          <div class="heat h1"></div><div class="heat h2"></div><div class="heat h3"></div>
-          <div class="fire" id="fire">🔥<small>화재 발생</small></div>
-          <div class="exit exit-1">⇢<span>1번 출구</span></div><div class="exit exit-2">⇢<span>3번 출구</span></div>
-          <div class="route r1"></div><div class="route r2"></div>
-          <div id="people" class="people"></div>
-          <div class="north">N ↑</div><div class="scale">━━━━ 10m</div>
-        </div>
+    <section class="stage-panel">
+      <div class="stage-heading">
+        <div><span class="eyebrow">T-JUNCTION · TRAJECTORY REPLAY</span><h1>화재 대피 디지털 실험</h1></div>
+        <div class="legend"><i class="pre"></i>대기 <i class="moving"></i>대피 <i class="evacuated"></i>완료</div>
       </div>
-      <div class="timeline"><button id="play" aria-label="재생">▶</button><span>00s</span><input id="time" type="range" min="0" max="60" value="0"><span>60s</span><strong id="timeLabel">현재 상태</strong></div>
+      <div class="canvas-wrap">
+        <canvas id="replay" width="900" height="560" aria-label="대피 궤적 재생"></canvas>
+        <div class="canvas-tip">Agent를 클릭하면 Persona와 행동 근거를 확인할 수 있습니다.</div>
+      </div>
+      <div class="timeline">
+        <button id="play">▶</button><span>0s</span><input id="time" type="range" min="0" max="90" step="0.5" value="0"><span id="maxTime">90s</span><strong id="timeLabel">0.0초</strong>
+      </div>
     </section>
-
-    <aside class="panel results">
-      <div class="panel-title"><span>02</span> AI 예측 결과</div>
-      <div class="risk-card"><span>현재 위험 수준</span><b id="riskLevel">주의</b><small id="riskText">승강장 인파 증가 감지</small></div>
-      <div class="metrics">
-        <div><span>현재 인원</span><b id="currentPeople">1,284</b><small>명</small></div>
-        <div><span>30초 후 예측</span><b id="futurePeople">1,520</b><small>명 <em>+18%</em></small></div>
-        <div><span>시뮬레이션 결과</span><b id="evacTime">—</b><small>전원 대피 완료</small></div>
+    <aside class="panel inspector">
+      <div class="panel-title"><span>02</span> AGENT INSPECTOR</div>
+      <div id="emptyInspector" class="empty">지도에서 Agent를 선택하세요.</div>
+      <div id="agentInspector" hidden>
+        <div class="agent-head"><span id="agentState">EVACUATING</span><b id="agentId">#—</b></div>
+        <h2 id="occupation">—</h2><p id="personaText"></p>
+        <div class="reason"><span>MAPPING REASON</span><p id="reasonText">—</p></div>
+        <div class="tendency-label">BEHAVIOR MAPPING</div>
+        <dl id="behaviorFacts"></dl>
+        <div class="tendency-label">JÜLICH / SIMULATION</div>
+        <dl id="empiricalFacts"></dl>
+        <div class="tendency-label">SCENARIO / PERSONA</div>
+        <dl id="scenarioFacts"></dl>
+        <details><summary>Provenance</summary><pre id="provenance"></pre></details>
       </div>
-      <div class="density"><div class="section-label">구역별 밀집도 <small>예측 60초</small></div>
-        <div class="bar"><span>A · 대합실</span><i><b id="barA" style="width:45%"></b></i><strong id="denA">45%</strong></div>
-        <div class="bar"><span>B · 환승 통로</span><i><b id="barB" class="danger" style="width:82%"></b></i><strong id="denB">82%</strong></div>
-        <div class="bar"><span>C · 승강장</span><i><b id="barC" style="width:38%"></b></i><strong id="denC">38%</strong></div>
-      </div>
-      <div class="recommend"><span>AI 대응 권고</span><p id="recommendation">3번 출구 병목 예상<br><b>1번 출구로 승객 35% 분산</b></p></div>
+      <div class="comparison"><div class="section-label">실행 데이터</div><div id="comparison"></div></div>
     </aside>
   </main>
-  <footer>DEMO MODEL · PERSONA-BASED CROWD EVACUATION · DATA IS SIMULATED</footer>
+  <footer><span>NEMOTRON PERSONA · JÜLICH EMPIRICAL · FDS/JUPEDSIM</span><span id="footerMeta"></span></footer>
   <script src="app.js"></script>
 </body>
 </html>

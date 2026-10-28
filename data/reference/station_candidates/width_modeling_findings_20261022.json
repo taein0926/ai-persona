@@ -1,0 +1,52 @@
+{
+  "reviewed_on": "2026-10-22",
+  "scope": "실제 역사의 계단 폭과 비율을 활용한 페르소나 대피 모형. 계단 전체의 길이·높이가 없어도 후보에서 제외하지 않는다.",
+  "applied_to_simulation": false,
+  "candidates": [
+    {
+      "station": "부산 2호선 센텀시티역",
+      "source_file": "centum_city_evacuation_2013.pdf",
+      "source_url": "https://www.jstage.jst.go.jp/article/jaabe/12/1/12_93/_pdf",
+      "source_year": 2013,
+      "page_1_based": 2,
+      "table": "Table 2. Main Paths in the Experiment",
+      "reported_widths_m": [
+        {"location": "Platform A,B,C,D", "width_m": 3.7},
+        {"location": "Waiting Room 1", "width_m": 7.5},
+        {"location": "Waiting Room 2", "width_m": 7.5},
+        {"location": "Exit 6", "width_m": 2.1},
+        {"location": "Exit 10,12", "width_m": 2.1},
+        {"location": "Exit 3,5,11,13", "width_m": 2.1}
+      ],
+      "other_evidence": "Figure 1 역 배치도, 실제 대피 실험 참가자 292명",
+      "limitations": "논문 당시 폭이며 현재 시설과의 일치 및 손잡이 사이 유효폭 여부는 미확인. Figure 1은 배치와 연결관계 확인용이며 축척 평면도로 간주하지 않는다."
+    },
+    {
+      "station": "서울 5호선 개화산역",
+      "source_file": "gaehwasan_mechanical_2026.pdf",
+      "source_url": "https://www.g2b.go.kr/pn/pnp/pnpe/UntyAtchFile/downloadFile.do?bidPbancNo=R26BK01488834&bidPbancOrd=000&fileSeq=6&fileType=&prcmBsneSeCd=07",
+      "drawing_date": "2025-12",
+      "page_1_based": 3,
+      "scale_label": "1/800",
+      "calibration_dimension_mm": 5028,
+      "available_geometry": "B1 대합실과 B2 승강장 전체 평면도 및 계단 위치·형상. 도면에 명시된 축선 간격으로 보정해 계단 폭을 비례 추정할 수 있다.",
+      "limitations": "계단별 유효폭 명시표는 아님. 비례 추정값과 명시값을 구분해야 한다. 하단 도면명에는 석계(6)역이라고 적힌 표제란 불일치가 있으나 본문 제목과 공사 위치는 개화산역이다. 현재 준공 상태와의 일치 미확인."
+    },
+    {
+      "station": "서울 양재역 3호선·신분당선 환승역",
+      "source_file": "yangjae_bim_evacuation_2022.pdf",
+      "source_url": "https://www.mdpi.com/2075-5309/12/11/1981",
+      "download_url": "https://mdpi-res.com/d_attachment/buildings/buildings-12-01981/article_deploy/buildings-12-01981.pdf",
+      "source_year": 2022,
+      "verified_pages_1_based": [6, 7, 8, 9, 10],
+      "available_evidence": "Revit·AutoCAD 모델링 및 Pathfinder 피난 분석. Figure 3 전체 3D 배치, Figure 4·5 층별 공간, 9쪽 일반 개찰구 폭 600mm 실측값.",
+      "limitations": "논문 PDF 확보. 편집 가능한 Revit·IFC·Pathfinder 모델 원본은 미확보. 원근 투시 이미지를 단일 치수로 등비 보정해서는 안 된다."
+    }
+  ],
+  "modeling_method": {
+    "width_estimation": "비율이 보존된 평면도에서 계단 폭 = 계단의 도면상 길이 / 기준 치수의 도면상 길이 × 기준 실제 치수. x·y 방향과 여러 기준 치수를 교차 확인한다.",
+    "display_scaling": "화면에서는 축소하되 물리 계산은 실제 m 단위로 유지한다.",
+    "lane_estimate": "열 수는 통행 가능 폭을 가정한 1인당 가로 점유폭으로 나눈 보조 지표이다. 0.60m는 예시 모델 가정이며 실측값이나 보장된 통과 용량이 아니다.",
+    "simulation": "실제 이동은 JuPedSim의 연속 공간 충돌 회피를 사용한다. 중앙 난간이 있는 계단은 통행 구역을 분할한다."
+  }
+}

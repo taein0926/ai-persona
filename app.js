@@ -1,49 +1,73 @@
-const controls = ['normal', 'follower', 'anxious', 'delayed'];
-const defaults = [45, 30, 15, 10];
-const SIM_MS_PER_SECOND = 170;
-let running = false, animationId, startedAt = 0, simSeconds = 0, completionTime = 56;
-let firePosition = { x: 64, y: 36 };
+const state = { data: null, variant: 'C', time: 0, playing: false, selected: null, lastFrame: 0 };
 const $ = id => document.getElementById(id);
-const defaultRiskText = $('riskText').textContent;
+const canvas = $('replay');
+const ctx = canvas.getContext('2d');
+const colors = { pre_moving: '#ffd261', evacuating: '#2be0c4', waiting_or_rerouting: '#ffad55', incapacitated: '#ff6868', evacuated: '#66858a' };
 
-function values() { return controls.map(id => +$(id).value); }
-function refresh() {
-  const v = values(), total = v.reduce((a, b) => a + b, 0);
-  controls.forEach((id, i) => $(id + 'Out').value = v[i]);
-  $('total').textContent = total + '%'; $('total').style.color = total === 100 ? 'var(--teal)' : 'var(--red)'; updateMetrics(v);
+function pointAt(agent, time) {
+  const points = agent.trajectory;
+  if (time <= points[0].t) return points[0];
+  if (time >= points.at(-1).t) return points.at(-1);
+  const hi = points.findIndex(point => point.t >= time);
+  const a = points[hi - 1], b = points[hi], ratio = (time - a.t) / (b.t - a.t || 1);
+  return { ...a, x: a.x + (b.x - a.x) * ratio, y: a.y + (b.y - a.y) * ratio, fed: a.fed + (b.fed - a.fed) * ratio };
 }
-function updateMetrics(v) {
-  const [normal, follower, anxious, delayed] = v, crowd = Math.round(1230 + follower * 7 + delayed * 4 - anxious * 3), bottleneck = Math.min(98, Math.round(50 + follower * .95 + delayed * .25 - anxious * .30));
-  $('currentPeople').textContent = crowd.toLocaleString('ko-KR'); $('futurePeople').textContent = Math.round(crowd * (1.1 + bottleneck / 600)).toLocaleString('ko-KR');
-  $('denA').textContent = Math.round(33 + normal * .28) + '%'; $('denB').textContent = bottleneck + '%'; $('denC').textContent = Math.round(27 + anxious * .4 + delayed * .2) + '%';
-  $('barA').style.width = $('denA').textContent; $('barB').style.width = bottleneck + '%'; $('barC').style.width = $('denC').textContent;
-  const high = bottleneck >= 80; $('riskLevel').textContent = high ? '위험' : '주의'; $('riskLevel').style.color = high ? 'var(--red)' : 'var(--yellow)';
-  $('riskText').textContent = high ? '3번 출구 앞 병목 발생 예상' : defaultRiskText; $('recommendation').innerHTML = high ? '3번 출구 병목 예상<br><b>1번 출구로 승객 35% 분산</b>' : '환승 통로 흐름 관찰 필요<br><b>안내 방송 준비 권고</b>';
-  document.querySelector('.h2').style.opacity = Math.min(.85, .2 + bottleneck / 130);
+function screen(point) { return { x: 45 + point.x / 30 * 810, y: 510 - point.y / 13 * 460 }; }
+function drawMap() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.fillStyle = '#19353d'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#31535b'; ctx.lineWidth = 1;
+  for (let x = 55; x < 850; x += 36) { ctx.beginPath(); ctx.moveTo(x, 55); ctx.lineTo(x, 500); ctx.stroke(); }
+  for (let y = 55; y < 510; y += 36) { ctx.beginPath(); ctx.moveTo(45, y); ctx.lineTo(850, y); ctx.stroke(); }
+  ctx.strokeStyle = '#89aeb4'; ctx.lineWidth = 3; ctx.strokeRect(45, 50, 810, 460);
+  ctx.fillStyle = '#214750'; ctx.fillRect(45, 50, 810, 106); ctx.fillRect(504, 156, 162, 354);
+  ctx.fillStyle = '#d6ebec'; ctx.font = '14px DM Mono'; ctx.fillText('T-JUNCTION', 520, 178); ctx.fillText('SPAWN', 565, 475);
+  drawExit(45, 103, 27, 'EXIT A'); drawExit(828, 103, 27, 'EXIT B');
+  const fire = screen({ x: 25, y: 11 }); const smoke = ctx.createRadialGradient(fire.x, fire.y, 5, fire.x, fire.y, 105);
+  smoke.addColorStop(0, '#ff5c5c99'); smoke.addColorStop(1, '#ff5c5c00'); ctx.fillStyle = smoke; ctx.beginPath(); ctx.arc(fire.x, fire.y, 105, 0, Math.PI * 2); ctx.fill();
+  ctx.font = '25px sans-serif'; ctx.fillText('🔥', fire.x - 12, fire.y + 8);
 }
-function randomStart() { let x, y; do { x = 12 + Math.random() * 57; y = 18 + Math.random() * 57; } while (Math.abs(x - firePosition.x) < 12 && Math.abs(y - firePosition.y) < 15); return { x, y }; }
-function routeFor(type, index, start) {
-  const exitOne = type === 'anxious' || (type === 'normal' && index % 3 === 0) || (type === 'delayed' && index % 2 === 0);
-  const safeLeft = Math.max(8, firePosition.x - 18), safeTop = Math.max(9, firePosition.y - 18), safeBottom = Math.min(82, firePosition.y + 20);
-  return exitOne ? [start, { x: safeLeft, y: safeTop }, { x: 76, y: safeTop }, { x: 91, y: 18 }] : [start, { x: safeLeft, y: safeBottom }, { x: 77, y: safeBottom }, { x: 91, y: 66 }];
+function drawExit(x, y, width, label) {
+  ctx.strokeStyle = '#2be0c4'; ctx.lineWidth = 3; ctx.strokeRect(x, y - 22, width, 44);
+  ctx.fillStyle = '#bffbf2'; ctx.font = '13px DM Mono'; ctx.textAlign = 'center';
+  ctx.fillText(label, x + width / 2, y - 31); ctx.textAlign = 'left';
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.arc(x + width / 2, y, 7, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(x + width / 2, y, 2.5, 0, Math.PI * 2); ctx.fill();
 }
-function generatePeople() {
-  const box = $('people'); box.innerHTML = ''; const types = ['normal', 'follower', 'anxious', 'delayed']; let globalIndex = 0;
-  types.forEach((type, k) => { const count = Math.max(3, Math.round(values()[k] / 4)); for (let i = 0; i < count; i++, globalIndex++) {
-    const start = randomStart(), p = document.createElement('i'); p.className = 'person ' + type; p.textContent = type === 'anxious' ? '◆' : type === 'delayed' ? '▲' : '●';
-    p.dataset.delay = type === 'delayed' ? '8' : '0'; p.dataset.travel = type === 'follower' ? '50' : type === 'delayed' ? '48' : '45'; p.dataset.route = JSON.stringify(routeFor(type, globalIndex, start)); p.style.left = start.x + '%'; p.style.top = start.y + '%'; box.appendChild(p);
-  }});
+function draw() {
+  if (!state.data) return; drawMap();
+  state.data.variants[state.variant].forEach(agent => {
+    const point = pointAt(agent, state.time), pos = screen(point), selected = state.selected?.agent_id === agent.agent_id;
+    ctx.beginPath(); ctx.arc(pos.x, pos.y, selected ? 8 : 5, 0, Math.PI * 2); ctx.fillStyle = colors[point.status]; ctx.shadowColor = colors[point.status]; ctx.shadowBlur = selected ? 18 : 8; ctx.fill(); ctx.shadowBlur = 0;
+    if (selected) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
+  });
+  $('clock').textContent = `SIM 00:${state.time.toFixed(1).padStart(4, '0')}`; $('timeLabel').textContent = `${state.time.toFixed(1)}초`;
 }
-function pointAlong(route, progress) { const lengths = route.slice(1).map((p, i) => Math.hypot(p.x - route[i].x, p.y - route[i].y)); let d = lengths.reduce((a, b) => a + b, 0) * Math.min(1, progress); for (let i = 0; i < lengths.length; i++) { if (d <= lengths[i]) { const t = d / lengths[i]; return { x: route[i].x + (route[i + 1].x - route[i].x) * t, y: route[i].y + (route[i + 1].y - route[i].y) * t }; } d -= lengths[i]; } return route.at(-1); }
-function movePeople(sec) { document.querySelectorAll('.person').forEach(p => { const delay = +p.dataset.delay, travel = +p.dataset.travel; if (sec < delay) { p.style.opacity = '.62'; return; } const point = pointAlong(JSON.parse(p.dataset.route), (sec - delay) / travel); p.style.opacity = sec >= delay + travel ? '.12' : '1'; p.style.left = point.x + '%'; p.style.top = point.y + '%'; }); }
-function setTime(sec) { simSeconds = Math.min(completionTime, Math.max(0, sec)); const display = Math.floor(simSeconds); $('time').value = display; $('clock').textContent = 'SIM TIME 00:' + String(display).padStart(2, '0'); $('timeLabel').textContent = display === 0 ? '현재 상태' : display >= completionTime ? '전원 대피 완료' : display + '초 경과'; movePeople(simSeconds); }
-function stop(completed = false) { running = false; cancelAnimationFrame(animationId); $('play').textContent = '▶'; if (completed) { $('timeLabel').textContent = '전원 대피 완료'; $('evacTime').textContent = Math.ceil(completionTime) + '초'; } }
-function animate(now) { setTime((now - startedAt) / SIM_MS_PER_SECOND); if (simSeconds >= completionTime) { stop(true); return; } animationId = requestAnimationFrame(animate); }
-function start() { if (values().reduce((a, b) => a + b, 0) !== 100) { $('total').textContent = '합계를 100%로 맞춰주세요'; return; } cancelAnimationFrame(animationId); generatePeople(); completionTime = Math.max(...[...document.querySelectorAll('.person')].map(p => +p.dataset.delay + +p.dataset.travel)); $('time').max = completionTime; document.querySelector('.timeline span:last-of-type').textContent = completionTime + 's'; $('evacTime').textContent = '—'; setTime(0); running = true; startedAt = performance.now(); $('play').textContent = '❚❚'; animationId = requestAnimationFrame(animate); }
-controls.forEach(id => $(id).addEventListener('input', refresh));
-controls.forEach(id => $(id + 'Out').addEventListener('input', e => { $(id).value = Math.min(100, Math.max(0, +e.target.value || 0)); refresh(); }));
-$('simulate').addEventListener('click', start);
-$('reset').addEventListener('click', () => { controls.forEach((id, i) => $(id).value = defaults[i]); refresh(); generatePeople(); setTime(0); $('evacTime').textContent = '—'; stop(); });
-$('time').addEventListener('input', e => { stop(); setTime(+e.target.value); }); $('play').addEventListener('click', () => { if (running) stop(); else start(); });
-$('station').addEventListener('click', e => { const rect = $('station').getBoundingClientRect(); firePosition = { x: Math.max(8, Math.min(86, (e.clientX - rect.left) / rect.width * 100)), y: Math.max(8, Math.min(82, (e.clientY - rect.top) / rect.height * 100)) }; $('fire').style.left = firePosition.x + '%'; $('fire').style.top = firePosition.y + '%'; generatePeople(); setTime(0); $('evacTime').textContent = '—'; stop(); });
-refresh(); generatePeople();
+function renderSummary() {
+  const s = state.data.summaries[state.variant];
+  $('summary').innerHTML = `<div><span>전원 대피</span><b>${s.all_evacuated ? 'YES' : 'NO'}</b></div><div><span>완료 시간</span><b>${s.total_evacuation_time_s?.toFixed(1) ?? '—'}s</b></div><div><span>평균 사전지연</span><b>${s.mean_pre_movement_s.toFixed(2)}s</b></div><div><span>평균 속도</span><b>${s.mean_speed_mps.toFixed(2)}m/s</b></div><div><span>경로 변경</span><b>${s.total_route_switches}</b></div><div><span>최대 FED</span><b>${s.max_fed.toFixed(4)}</b></div>`;
+  $('comparison').innerHTML = `<p><span>backend</span><b>${state.data.backend}</b></p><p><span>provider</span><b>${state.data.provenance.provider}</b></p>`;
+}
+function renderInspector() {
+  const agent = state.selected; $('emptyInspector').hidden = Boolean(agent); $('agentInspector').hidden = !agent; if (!agent) return;
+  const point = pointAt(agent, state.time); $('agentState').textContent = point.status.replaceAll('_', ' ').toUpperCase(); $('agentId').textContent = `#${agent.agent_id} · SLOT ${agent.agent_slot}`;
+  $('occupation').textContent = `${agent.persona.occupation} · ${agent.persona.age}세`; $('personaText').textContent = agent.persona.persona;
+  const mapping = agent.mapping;
+  $('behaviorFacts').innerHTML = [['response_tendency', mapping?.response_tendency ?? '사용 안 함'], ['speed_tendency', mapping?.speed_tendency ?? '사용 안 함']].map(([key, value]) => `<dt>${key}</dt><dd>${value}</dd>`).join('');
+  $('empiricalFacts').innerHTML = [['Jülich response_time', `${agent.empirical?.response_time_s?.toFixed(2) ?? agent.pre_movement_s.toFixed(2)}s`], ['Jülich speed proxy', `${agent.empirical?.observed_speed_proxy_mps?.toFixed(2) ?? agent.desired_speed_mps.toFixed(2)}m/s`], ['premovement', `${agent.pre_movement_s.toFixed(2)}s`], ['desired speed proxy', `${agent.desired_speed_mps.toFixed(2)}m/s`]].map(([key, value]) => `<dt>${key}</dt><dd>${value}</dd>`).join('');
+  $('scenarioFacts').innerHTML = [['age / sex', `${agent.persona.age}세 · ${agent.persona.sex}`], ['occupation', agent.persona.occupation], ['Persona UUID', agent.persona.uuid], ['지역', `${agent.persona.province} ${agent.persona.district}`], ['social mode', agent.scenario_context.social_mode], ['familiarity', agent.scenario_context.familiarity], ['출구', agent.exit_id], ['현재 FED', point.fed.toFixed(6)]].map(([key, value]) => `<dt>${key}</dt><dd>${value}</dd>`).join('');
+  $('reasonText').innerHTML = mapping ? `<strong>Response</strong> ${mapping.reasoning_summary.response_tendency}<br><strong>Speed</strong> ${mapping.reasoning_summary.speed_tendency}` : '이 실험군은 LLM mapping을 사용하지 않습니다.'; $('provenance').textContent = JSON.stringify(agent.provenance, null, 2);
+}
+function selectVariant(variant) { state.variant = variant; state.selected = null; document.querySelectorAll('[data-variant]').forEach(button => button.classList.toggle('active', button.dataset.variant === variant)); renderSummary(); renderInspector(); draw(); }
+function animate(timestamp) { if (!state.playing) return; if (!state.lastFrame) state.lastFrame = timestamp; state.time += (timestamp - state.lastFrame) / 180; state.lastFrame = timestamp; const max = +$('time').max; if (state.time >= max) { state.time = max; state.playing = false; $('play').textContent = '▶'; } $('time').value = state.time; draw(); renderInspector(); if (state.playing) requestAnimationFrame(animate); }
+canvas.addEventListener('click', event => { const rect = canvas.getBoundingClientRect(), sx = canvas.width / rect.width, sy = canvas.height / rect.height, click = { x: (event.clientX - rect.left) * sx, y: (event.clientY - rect.top) * sy }; state.selected = state.data.variants[state.variant].map(agent => ({ agent, pos: screen(pointAt(agent, state.time)) })).sort((a, b) => Math.hypot(a.pos.x - click.x, a.pos.y - click.y) - Math.hypot(b.pos.x - click.x, b.pos.y - click.y))[0]?.agent ?? null; renderInspector(); draw(); });
+$('variantTabs').addEventListener('click', event => { const button = event.target.closest('button'); if (button) selectVariant(button.dataset.variant); });
+$('time').addEventListener('input', event => { state.time = +event.target.value; state.playing = false; $('play').textContent = '▶'; draw(); renderInspector(); });
+$('play').addEventListener('click', () => { state.playing = !state.playing; $('play').textContent = state.playing ? '❚❚' : '▶'; state.lastFrame = 0; if (state.playing) { if (state.time >= +$('time').max) state.time = 0; requestAnimationFrame(animate); } });
+async function loadResults() {
+  let response = await fetch('/api/results');
+  if (!response.ok) response = await fetch('results.json');
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+loadResults().then(data => { state.data = data; $('experiment').textContent = `${data.experiment_id} · SEED ${data.replicate_seed}`; $('assignmentHash').textContent = data.assignment_manifest_hash; $('backendNotice').textContent = data.backend_notice; $('footerMeta').textContent = `${data.backend.toUpperCase()} · ${data.variants.C.length} AGENTS`; const max = Math.max(...data.variants.C.map(agent => agent.trajectory.at(-1).t)); $('time').max = max; $('maxTime').textContent = `${max.toFixed(1)}s`; renderSummary(); draw(); }).catch(error => { $('backendNotice').textContent = `결과를 불러오지 못했습니다: ${error.message}`; });

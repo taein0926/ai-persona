@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+.env
+output/
+data/cache/
+data/raw/
+data/processed/
+public/
+.chart-data-*/
+.codex-finalizer/
+.pptx-build/
+
+# 참고 이미지, 도면, 발표 자료는 로컬에만 보관합니다.
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.svg
+*.pdf
+*.ppt
+*.pptx
+

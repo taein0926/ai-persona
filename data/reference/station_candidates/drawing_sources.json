@@ -1,0 +1,43 @@
+{
+  "retrieved_on": "2026-10-19",
+  "applied_to_simulation": false,
+  "recommended_candidate": "개화산역",
+  "files": [
+    {
+      "file": "gaehwasan_mechanical_2026.pdf",
+      "url": "https://www.g2b.go.kr/pn/pnp/pnpe/UntyAtchFile/downloadFile.do?bidPbancNo=R26BK01488834&bidPbancOrd=000&fileSeq=6&fileType=&prcmBsneSeCd=07",
+      "publisher": "서울교통공사",
+      "cover_date": "2026-03",
+      "drawing_date": "2025-12",
+      "verified_pages_1_based": [3],
+      "contents": "3쪽 개화산역 B1 대합실, B2 승강장, 1층 전기실, 2층 환기실 평면도. 축선 간격 치수 포함. 축척 표기 1/800.",
+      "limitations": "자동제어 공사 도면으로 모든 계단 유효폭과 단면이 명시된 건축 준공도는 아님. 3쪽 본문 제목과 공사 위치는 개화산이나 도면명 칸에는 석계(6)역이라고 기재되어 있어 표제란 불일치에 유의. 최신 준공 상태와의 일치 미확인."
+    },
+    {
+      "file": "gaehwasan_seokgye_civil_drawings.pdf",
+      "url": "https://www.g2b.go.kr/pn/pnp/pnpe/UntyAtchFile/downloadFile.do?bidPbancNo=R25BK01160014&bidPbancOrd=000&fileSeq=5&fileType=&prcmBsneSeCd=07",
+      "publisher": "서울교통공사",
+      "notice_date": "2025-11-17",
+      "gaehwasan_drawing_date": "2020-09",
+      "verified_pages_1_based": [1, 2],
+      "contents": "1쪽 개화산역 내부 E/S 현황도 1:400. 2쪽 내부 E/S 구조물 일반도 1:100: 연결부 대합실층·승강장층 평면도, 종단면도, 단면도, 치수선.",
+      "limitations": "내부 에스컬레이터 설치 구간 중심. 전 역사의 계단 유효폭을 제공하지 않음. 3~4쪽 석계역은 환승역이므로 이번 후보에서 제외."
+    },
+    {
+      "file": "nokbeon_suyu_drawings.pdf",
+      "url": "https://www.g2b.go.kr/pn/pnp/pnpe/UntyAtchFile/downloadFile.do?bidPbancNo=R25BK01043533&bidPbancOrd=000&fileType=&fileSeq=5",
+      "publisher": "서울교통공사",
+      "notice_date": "2025-09-04",
+      "overview_drawing_date": "2019-08",
+      "verified_pages_1_based": [1, 2, 3, 4, 5, 6],
+      "contents": "1~3쪽 녹번역: 3번 출입구 외부 E/S 현황도, 변경후 평면도 및 횡단면도. 4~6쪽 수유역: 5번 출입구 외부 E/S 현황도, 변경후 평면도 및 횡단면도. 현황도 1:600, 상세도 1:120. 계단·참·통로 치수선 포함.",
+      "limitations": "특정 외부출입구 공사 중심으로 승강장 전체 치수와 내부 계단 상세는 부족. 2025년 입찰 첨부 사실이 2025년 작성 또는 현재 준공 상태를 뜻하지 않음."
+    }
+  ],
+  "modeling_notes": [
+    "명시 치수와 도면에서 추정한 치수를 구분할 것. 축척은 PDF 재출력 과정에서 바뀔 수 있으므로 명시 치수로 보정할 것.",
+    "구조체 폭, 에스컬레이터 규격, 난간 사이 보행 유효폭을 혼용하지 말 것.",
+    "공사 설계도면을 최신 준공도면으로 취급하지 말 것.",
+    "역사 전체 형상 복원과 FDS용 환기·제연 운전조건 확보는 별도 검증 사항임."
+  ]
+}

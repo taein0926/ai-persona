@@ -1,0 +1,214 @@
+{
+  "source": {
+    "pdf": "data/reference/station_candidates/gaehwasan_mechanical_2026.pdf",
+    "pdf_sha256": "6926f1a1d05d4ebef449b95d9b48479803fa0c702e3555c239ff61e9bf5feeff",
+    "page_1_based": 3,
+    "drawing_date": "2025-12",
+    "url": "https://www.g2b.go.kr/pn/pnp/pnpe/UntyAtchFile/downloadFile.do?bidPbancNo=R26BK01488834&bidPbancOrd=000&fileSeq=6&fileType=&prcmBsneSeCd=07",
+    "coordinate_system": "PDF points, top-left origin",
+    "calibration": {
+      "dimension_mm": 4000,
+      "endpoints_pdf": [
+        [
+          689.76,
+          230.0
+        ],
+        [
+          689.76,
+          245.12
+        ]
+      ],
+      "m_per_pdf_point": 0.2645502645502646,
+      "isotropic": true,
+      "grid_check_mm": 5028,
+      "grid_interval_pdf_points": 18.96,
+      "grid_reconstructed_m": 5.0159
+    },
+    "floor_origins_pdf": {
+      "B2": [
+        320,
+        730
+      ],
+      "B1": [
+        376,
+        350
+      ],
+      "F1": [
+        74,
+        350
+      ]
+    },
+    "note": "도면의 명시 치수로 등비 보정한 윤곽 근사. 하단 도면명 석계 표기는 본문 개화산 제목·위치와 불일치."
+  },
+  "measurements": [
+    {
+      "id": "A_W",
+      "label": "북측 승강장 서쪽 → B1",
+      "method": "drawing_ratio",
+      "drawing_page": 3,
+      "pdf_endpoints": [
+        [
+          647,
+          613
+        ],
+        [
+          647,
+          628
+        ]
+      ],
+      "measured_width_m": 3.968,
+      "estimated_width_m": 3.77,
+      "handrail_allowance_m": 0.2,
+      "uncertainty_m": 0.3,
+      "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
+    },
+    {
+      "id": "A_E",
+      "label": "북측 승강장 동쪽 → B1",
+      "method": "drawing_ratio",
+      "drawing_page": 3,
+      "pdf_endpoints": [
+        [
+          758,
+          609
+        ],
+        [
+          759,
+          625
+        ]
+      ],
+      "measured_width_m": 4.241,
+      "estimated_width_m": 4.04,
+      "handrail_allowance_m": 0.2,
+      "uncertainty_m": 0.3,
+      "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
+    },
+    {
+      "id": "B_W",
+      "label": "남측 승강장 서쪽 → B1",
+      "method": "drawing_ratio",
+      "drawing_page": 3,
+      "pdf_endpoints": [
+        [
+          648,
+          701
+        ],
+        [
+          648,
+          716
+        ]
+      ],
+      "measured_width_m": 3.968,
+      "estimated_width_m": 3.77,
+      "handrail_allowance_m": 0.2,
+      "uncertainty_m": 0.3,
+      "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
+    },
+    {
+      "id": "B_E",
+      "label": "남측 승강장 동쪽 → B1",
+      "method": "drawing_ratio",
+      "drawing_page": 3,
+      "pdf_endpoints": [
+        [
+          758,
+          696
+        ],
+        [
+          759,
+          712
+        ]
+      ],
+      "measured_width_m": 4.241,
+      "estimated_width_m": 4.04,
+      "handrail_allowance_m": 0.2,
+      "uncertainty_m": 0.3,
+      "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
+    },
+    {
+      "id": "H_W",
+      "label": "B1 서쪽 곡선 계단 → 1F",
+      "method": "drawing_ratio",
+      "drawing_page": 3,
+      "pdf_endpoints": [
+        [
+          776,
+          274
+        ],
+        [
+          793,
+          274
+        ]
+      ],
+      "measured_width_m": 4.497,
+      "estimated_width_m": 4.3,
+      "handrail_allowance_m": 0.2,
+      "uncertainty_m": 0.3,
+      "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
+    },
+    {
+      "id": "H_E",
+      "label": "B1 동쪽 왕복 계단 → 1F",
+      "method": "drawing_ratio",
+      "drawing_page": 3,
+      "pdf_endpoints": [
+        [
+          912,
+          247
+        ],
+        [
+          914,
+          262
+        ]
+      ],
+      "measured_width_m": 4.003,
+      "estimated_width_m": 3.8,
+      "handrail_allowance_m": 0.2,
+      "uncertainty_m": 0.3,
+      "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
+    },
+    {
+      "id": "E_1",
+      "label": "1F → 1번 지상 출구",
+      "method": "drawing_ratio",
+      "drawing_page": 3,
+      "pdf_endpoints": [
+        [
+          514,
+          195
+        ],
+        [
+          529,
+          199
+        ]
+      ],
+      "measured_width_m": 4.107,
+      "estimated_width_m": 3.91,
+      "handrail_allowance_m": 0.2,
+      "uncertainty_m": 0.3,
+      "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
+    },
+    {
+      "id": "E_2",
+      "label": "1F → 2번 지상 출구",
+      "method": "drawing_ratio",
+      "drawing_page": 3,
+      "pdf_endpoints": [
+        [
+          538,
+          330
+        ],
+        [
+          559,
+          329
+        ]
+      ],
+      "measured_width_m": 5.562,
+      "estimated_width_m": 5.36,
+      "handrail_allowance_m": 0.2,
+      "uncertainty_m": 0.3,
+      "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
+    }
+  ],
+  "applied_to_simulation": true
+}

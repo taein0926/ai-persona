@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>개화산역 · 페르소나 대피 시뮬레이션</title>
+  <link rel="stylesheet" href="/gaehwasan.css?v=20261027-2">
+  <script type="importmap">{"imports":{"three":"/vendor/three/three.module.js"}}</script>
+</head>
+<body data-station="gaehwasan">
+  <main class="editor-shell">
+    <aside class="scene-panel" aria-label="실행 설정과 에이전트 목록">
+      <h2 class="panel-title">시뮬레이션</h2>
+      <section class="settings-block"><form id="stairsForm">
+        <label for="agentCount">대피 인원</label><select id="agentCount"><option>10</option><option>30</option><option>60</option><option selected>100</option></select>
+        <label for="fireMode">화재 시나리오</label><select id="fireMode"><option value="fds">5호선 정차 열차 화재</option><option value="off">화재 끄기</option></select>
+        <label for="behaviorMode">상황 판단</label><select id="behaviorMode"><option value="qwen">로컬 Qwen</option><option value="off">기본 이동</option></select><button id="behaviorRun" type="submit" disabled>설정으로 계산</button>
+      </form></section>
+      <div id="message" role="status" aria-live="polite">시뮬레이션을 불러오는 중입니다.</div>
+      <section class="metrics" id="metrics" aria-label="시뮬레이션 요약"></section>
+      <section class="display-settings settings-block"><label for="fieldMode">환경 표시</label><select id="fieldMode"><option value="volume">입체 연기</option><option value="smoke">보행 높이 연기</option><option value="temperature">온도</option><option value="none">숨기기</option></select><label for="smokeOpacity">연기 불투명도 <output id="smokeOpacityValue" for="smokeOpacity">100%</output></label><input id="smokeOpacity" type="range" min="0" max="1" step="0.05" value="1"></section>
+      <section class="agents-panel"><div class="section-title">에이전트 <span id="agentListCount">100명</span></div><input id="agentSearch" type="search" aria-label="에이전트 검색" placeholder="번호 · 직업 검색"><div class="persona-list" id="personaList"></div></section>
+    </aside>
+    <section class="map-panel" aria-label="대피 시뮬레이션 뷰포트">
+      <div class="map-header"><strong>개화산역 대피 동선</strong><div class="legend"><span class="dot moving"></span>이동 <span class="dot overtaking"></span>추월 <span class="dot slowed"></span>정지·서행</div></div>
+      <div class="map-viewport"><div id="map3d" role="group" aria-label="개화산역 입체 지도. 사람을 클릭하면 선택하고 따라갑니다."></div><svg id="map" viewBox="0 0 1100 1050" role="group" aria-label="승강장과 대합실, 계단을 연결한 역사 지도"></svg><div class="world-overview"><svg id="stationMiniMap" viewBox="0 0 1100 1050" role="img" aria-label="전체 역사와 현재 카메라 위치"></svg></div><div class="map-tools"><button id="zoomFit" aria-label="처음 시점으로 돌아가기">처음 시점 ↺</button></div></div>
+      <div class="playback"><button id="play" disabled aria-label="재생">▶</button><button id="reset" disabled aria-label="처음으로">↺</button><time id="clock">0.0초</time><input id="time" type="range" aria-label="재생 시각" min="0" max="270" step="any" value="0" disabled><span id="endTime">—</span><select id="speed" aria-label="재생 속도"><option value="1">1×</option><option value="2" selected>2×</option><option value="5">5×</option></select></div>
+      <div class="live-stats" id="liveStats"></div>
+    </section>
+    <aside class="inspector" id="personaInspector" aria-label="선택한 에이전트 상세">
+      <h2 class="panel-title">선택한 에이전트 <span id="selectedAgentBadge">#1</span></h2>
+      <div class="inspector-content"><div class="selection-heading"><h3 id="personTitle">불러오는 중</h3><span id="selectedMotionStatus" class="motion-badge">대피 전 대기</span></div><p id="personDescription"></p><div id="personDetails"></div>
+      <details class="assumptions"><summary>선택한 사람의 판단 기록</summary><div id="decisionLog"></div></details></div>
+    </aside>
+  </main>
+  <script src="/gaehwasan.js?v=20261027-private2"></script><script src="/private_inspector.js?v=20261028-profile-methods"></script><script src="/station_viewer.js?v=20261027-private2"></script><script type="module" src="/gaehwasan3d.js?v=20261027-2"></script>
+</body>
+</html>

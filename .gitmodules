@@ -1,0 +1,3 @@
+[submodule "vendor/pyFDS-Evac"]
+	path = vendor/pyFDS-Evac
+	url = https://github.com/PedestrianDynamics/pyFDS-Evac.git

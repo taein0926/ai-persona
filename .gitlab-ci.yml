@@ -1,8 +1,22 @@
+stages: [test, deploy]
+
+test:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - pip install -e '.[dev]'
+    - pytest
+
 pages:
   stage: deploy
+  image: python:3.12-slim
+  before_script:
+    - pip install -e .
   script:
+    - persona-evac run --config configs/experiments/mvp.json
     - mkdir public
     - cp index.html styles.css overrides.css app.js public/
+    - cp output/latest/results.json public/results.json
   pages:
     publish: public
   rules:

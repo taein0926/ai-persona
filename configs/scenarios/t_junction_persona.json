@@ -1,0 +1,19 @@
+{
+  "name": "t_junction_persona",
+  "geometry_source": "vendor/pyFDS-Evac/assets/t_junction/geometry.wkt",
+  "fds_source": "vendor/pyFDS-Evac/assets/t_junction/t_junction.fds",
+  "backend": "deterministic_mvp",
+  "duration_s": 90,
+  "time_step_s": 0.5,
+  "agent_radius_m": 0.15,
+  "spawn_polygon": [[1.0, 1.0], [4.8, 1.0], [4.8, 4.8], [1.0, 4.8]],
+  "exits": {
+    "exit_1": [10.0, 1.2],
+    "exit_2": [10.0, 6.8]
+  },
+  "baseline": {
+    "desired_speed_mps": 1.2,
+    "pre_movement_s": 0.0,
+    "exit_familiarity": "discovery"
+  }
+}

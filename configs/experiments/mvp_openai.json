@@ -1,0 +1,14 @@
+{
+  "experiment_id": "t-junction-mvp-openai",
+  "master_seed": 20260916,
+  "replicate_seed": 1,
+  "agent_count": 10,
+  "provider": "openai",
+  "role": "visitor",
+  "social_mode": "individual",
+  "familiarity": "discovery",
+  "scenario": "configs/scenarios/t_junction_persona.json",
+  "persona_source": "data/raw/nemotron_personas_10.jsonl",
+  "empirical_source": "data/processed/julich_features.csv",
+  "output_dir": "output"
+}

@@ -1,0 +1,51 @@
+{
+  "source_pdf": "data/reference/station_candidates/gaehwasan_mechanical_2026.pdf",
+  "page": 3,
+  "previous_pdf_points": {
+    "H_W": {
+      "from": [
+        799,
+        281
+      ],
+      "to": [
+        495,
+        282
+      ]
+    },
+    "H_E": {
+      "from": [
+        908,
+        261
+      ],
+      "to": [
+        589,
+        261
+      ]
+    }
+  },
+  "corrected_pdf_points": {
+    "H_W": {
+      "from": [
+        785,
+        300
+      ],
+      "to": [
+        487,
+        262
+      ],
+      "form": "곡선"
+    },
+    "H_E": {
+      "from": [
+        897,
+        275
+      ],
+      "to": [
+        591,
+        246
+      ],
+      "form": "왕복 계단·평평한 중간 계단참"
+    }
+  },
+  "limits": "도면 끝점과 안내도의 연결 관계를 대조한 근사이며 세부 단면 높이·단수와 계단참 치수는 미확인."
+}

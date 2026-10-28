@@ -1,0 +1,16 @@
+.git
+.venv
+output
+.chart-data-*
+.codex-finalizer
+.pptx-build
+__pycache__
+*.pyc
+vendor/pyFDS-Evac/.git
+vendor/pyFDS-Evac/artifacts
+vendor/pyFDS-Evac/docs
+vendor/pyFDS-Evac/materials
+vendor/pyFDS-Evac/notebooks
+vendor/pyFDS-Evac/specs
+vendor/pyFDS-Evac/tests
+
