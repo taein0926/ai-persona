@@ -13,6 +13,7 @@ from persona_evac.llm.ollama import atomic_json
 
 TRAITS={'crowd_avoidance':'혼잡 회피','waiting_patience':'대기 인내',
         'risk_avoidance':'위험 회피','exploration':'탐색 적극성'}
+FULL_TRAITS={**TRAITS,'social_following':'타인 추종성','overtaking_tendency':'추월 적극성'}
 LEVELS=['low','normal','high']
 LABELS={'low':'낮음','normal':'보통','high':'높음'}
 CUES={'crowd_avoidance':r'혼잡|인파|북적|한적|사람.{0,8}많|군중',
@@ -125,8 +126,16 @@ class ExperimentalProfiles:
         started=time.perf_counter();result={};pending=[]
         for a in agents:
             p=a['persona'];quotes,by_trait=candidates(p)
+            if quotes and self.local is None and not cache_only:
+                from persona_evac.llm.ollama import LocalOllama
+                self.local=LocalOllama()
             key=hashlib.sha256(canonical_json({'persona':p,'seed':self.seed,'policy':POLICY_HASH,'prompt':PROMPT}).encode()).hexdigest()
             path=self.directory/p['uuid']/str(self.seed)/f'{key}.json'
+            if quotes and self.local and path.exists():
+                old=json.loads(path.read_text(encoding='utf-8'))
+                if old.get('model')!={'name':self.local.model,'digest':self.local.digest}:
+                    model_key=hashlib.sha256(canonical_json({'name':self.local.model,'digest':self.local.digest}).encode()).hexdigest()
+                    path=path.with_name(f'{key}.{model_key}.json')
             if path.exists():
                 stored=validate_profile(json.loads(path.read_text(encoding='utf-8')),p,self.seed)
                 if self.local and stored.get('model') and stored['model']['digest']!=self.local.digest:raise ValueError('프로필 모델 버전이 다릅니다. 새 정책/캐시 위치에서 준비하세요.')

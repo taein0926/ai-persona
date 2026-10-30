@@ -76,7 +76,7 @@ def resolve_stair(stair: dict) -> None:
     stair["parallel_lanes"] = max(1, math.floor(stair["width_m"] / stair.get("lane_width_m", 0.60)))
 
 
-def initialize_station(source: dict, config: dict, overrides: StationRequest | None = None) -> dict:
+def initialize_station(source: dict, config: dict, overrides: StationRequest | None = None, *, preview_only: bool = False) -> dict:
     config = deepcopy(config)
     stairs = {item["id"]: item for item in config["stairs"]}
     seen = set()
@@ -105,9 +105,12 @@ def initialize_station(source: dict, config: dict, overrides: StationRequest | N
         raise ValueError("층별 보행 영역과 인원수만큼의 시작 위치가 필요합니다.")
     agents = []
     for index, original in enumerate(originals):
-        speed = float(original["desired_speed_mps"])
-        delay = float(original["pre_movement_s"])
-        if not math.isfinite(speed) or speed <= 0 or not math.isfinite(delay) or delay < 0:
+        pending = original.get('classification_pending',False)
+        if pending and not preview_only:
+            raise ValueError('사전 분류가 필요합니다. Gemma로 초기값을 준비한 뒤 계산하세요.')
+        speed = None if pending else float(original["desired_speed_mps"])
+        delay = None if pending else float(original["pre_movement_s"])
+        if not pending and (not math.isfinite(speed) or speed <= 0 or not math.isfinite(delay) or delay < 0):
             raise ValueError("시작 지연과 기본 이동속도가 유효하지 않습니다.")
         agent = {
             key: deepcopy(original.get(key))
@@ -121,6 +124,7 @@ def initialize_station(source: dict, config: dict, overrides: StationRequest | N
                 "provenance",
                 "pre_movement_s",
                 "desired_speed_mps",
+                "classification_pending",
             )
         }
         agent.update(
@@ -160,9 +164,15 @@ def source_manifest(source, originals):
 def simulate_station(
     source: dict, config: dict, overrides: StationRequest | None = None, decision_provider=None
 ) -> dict:
+    if config.get('simulation_enabled') is False:
+        raise ValueError('시뮬레이션 계산은 보류 중입니다. 명시적으로 계산을 재개한 뒤 실행하세요.')
     from persona_evac.integration.station_dynamics import simulate
 
-    return simulate(source, config, overrides or StationRequest(), decision_provider)
+    request = overrides or StationRequest()
+    if request.behavior_mode == 'qwen' and source.get('backend') == 'nemotron_qwen_empirical':
+        from persona_evac.persona.station_population import refresh_population
+        source = refresh_population(source, request.agent_count)
+    return simulate(source, config, request, decision_provider)
 
 
 def run_station(

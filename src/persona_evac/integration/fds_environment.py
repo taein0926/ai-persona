@@ -24,7 +24,8 @@ def geometry_hash(config):
     geometry = {k: config[k] for k in ("floors", "nodes")}
     if config.get('train'):
         geometry.update(train=config['train'],fire=config['fire'],
-                        stair_paths=[(s['id'],s.get('path_xyz'),s['width_m']) for s in config['stairs']])
+                        stair_paths=[{key:s.get(key) for key in ('id','kind','path_xyz','branch_paths_xyz','flights',
+                            'landings','floor_opening_polygon','exit_boundary_xy','width_m')} for s in config['stairs']])
     return hashlib.sha256(json.dumps(geometry, sort_keys=True).encode()).hexdigest()
 
 
@@ -40,7 +41,9 @@ def export_fds(fds_dir: Path, output_dir: Path, config_path: Path, deck_path: Pa
         raise ValueError("FDS 계산이 정상 완료되지 않았습니다.")
     if sha(deck_path) != sha(fds_dir / f"{chid}.fds"):
         raise ValueError("Completed FDS deck does not match the current input")
-    sim = Simulation(str(fds_dir))
+    # A setup-check subdirectory may contain another SMV. Select the completed
+    # run explicitly instead of letting the reader recursively choose one.
+    sim = Simulation(str(fds_dir / f"{chid}.smv"))
     arrays, times, xs, ys = {}, None, None, None
     for floor, height in settings["slice_height_m"].items():
         for key, quantity in (("k", "EXTINCTION COEFFICIENT"), ("temperature", "TEMPERATURE")):
@@ -86,11 +89,23 @@ def export_fds(fds_dir: Path, output_dir: Path, config_path: Path, deck_path: Pa
                 "sampling": "nearest FDS spatial node, linear time interpolation",
                 "raw_files_sha256": {p.name: sha(p) for p in sorted(fds_dir.glob(f"{chid}*.sf"))},
                 "out_sha256": sha(fds_dir / f"{chid}.out")}
+    if (fds_dir/'geometry_audit.json').exists():
+        metadata['geometry_audit']=json.loads((fds_dir/'geometry_audit.json').read_text(encoding='utf8'))
     np.savez_compressed(output_dir / "fields.npz", times=times, x=xs, y=ys, **arrays)
     metadata["fields_sha256"] = sha(output_dir / "fields.npz")
     (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     print(json.dumps({"frames": len(times), "time_end_s": float(times[-1]),
                       "max_k": {f: float(arrays[f+"_k"].max()) for f in settings["slice_height_m"]}}))
+
+
+@lru_cache(maxsize=256)
+def _stair_path_metrics(path):
+    """경로 내용이 같은 동안만 원래 NumPy 연산 결과를 재사용한다."""
+    points=np.asarray(path,dtype=float)
+    lengths=np.linalg.norm(np.diff(points,axis=0),axis=1)
+    total=sum(lengths)
+    points.flags.writeable=False;lengths.flags.writeable=False
+    return points,lengths,total
 
 
 class FireField:
@@ -178,8 +193,8 @@ class FireField:
         from persona_evac.integration.station_layout import stair_path
         if any('elevation_m' not in f for f in config['floors']):
             config={**config,'floors':[{**f,'elevation_m':self.meta['fire']['slice_height_m'][f['id']]-1.5} for f in config['floors']]}
-        points=np.asarray(stair_path(config,stair),dtype=float)
-        lengths=np.linalg.norm(np.diff(points,axis=0),axis=1);distance=np.clip(progress,0,1)*sum(lengths)
+        path=tuple(tuple(p) for p in stair_path(config,stair))
+        points,lengths,total=_stair_path_metrics(path);distance=np.clip(progress,0,1)*total
         xyz=points[-1].copy()
         for i,length in enumerate(lengths):
             if distance<=length or i==len(lengths)-1:
@@ -242,10 +257,11 @@ class FireField:
             voxels=[{'x':float(self.data['volume_x'][ix]),'y':float(self.data['volume_y'][iy]),
                      'z':float(self.data['volume_z'][iz])} for ix,iy,iz in indices]
             volume_frames=[]
+            selected=tuple(indices.T)
             for t in sorted(set([float(until)]+[float(t) for t in np.arange(0,float(until),4)])):
                 lo,hi,w=self.indices(t)
-                values=(1-w)*raw[lo]+w*raw[hi]
-                volume_frames.append({'time_s':t,'k':[round(float(values[ix,iy,iz]),4) for ix,iy,iz in indices]})
+                values=(1-w)*raw[lo][selected]+w*raw[hi][selected]
+                volume_frames.append({'time_s':t,'k':[round(float(value),4) for value in values]})
             result['volume']={'voxels':voxels,'frames':volume_frames,'cell_m':[3,2,1],
                               'source':'FDS extinction coefficient; actual horizontal slices stacked in z',
                               'notice':'FDS 높이별 소광계수를 3×2×1m 표시 셀로 표본화한 입체 연기. 계단을 통한 상승도 계산값을 사용합니다.'}

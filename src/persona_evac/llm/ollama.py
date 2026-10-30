@@ -1,4 +1,4 @@
-"""Local Qwen structured inference with separate caches and measured runtimes."""
+"""로컬 모델의 구조화 추론·모델별 캐시·처리 시간 측정."""
 from __future__ import annotations
 
 import hashlib
@@ -10,10 +10,15 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
+from dotenv import load_dotenv
 
 from persona_evac.hashing import canonical_json
-from persona_evac.llm.providers import GROQ_MAPPING_PROMPT, JsonCache
-from persona_evac.schemas import BehaviorMapping
+from persona_evac.llm.common import JsonCache
+from persona_evac.llm.baseline_profile import POLICY as BASELINE_POLICY, PROMPT as MAPPING_PROMPT, SCHEMA, validate_mapping
+
+
+load_dotenv()
+DEFAULT_MODEL='gemma4:e2b-it-qat'
 
 
 def atomic_json(path, payload):
@@ -25,7 +30,7 @@ def atomic_json(path, payload):
 
 class LocalOllama:
     def __init__(self,client=None):
-        self.model=os.environ.get('OLLAMA_MODEL','qwen3:4b')
+        self.model=os.environ.get('OLLAMA_MODEL',DEFAULT_MODEL)
         self.base_url=os.environ.get('OLLAMA_BASE_URL','http://localhost:11434').rstrip('/')
         if urlparse(self.base_url).hostname not in {'localhost','127.0.0.1','::1','host.docker.internal'} or 'cloud' in self.model.lower():
             raise ValueError('로컬 Ollama 주소와 로컬 모델만 사용할 수 있습니다.')
@@ -88,46 +93,33 @@ class OllamaProvider:
         self.local=LocalOllama(client)
         self.model=self.local.model
         self.cache=JsonCache(cache_dir)
-        self.settings={**self.local.settings,'system_prompt':GROQ_MAPPING_PROMPT,'max_completion_tokens':512}
+        self.settings={**self.local.settings,'system_prompt':MAPPING_PROMPT,'max_completion_tokens':1024,
+                       'mapping_policy':BASELINE_POLICY}
         self.records=[]
 
     def map(self,profile,scenario_context):
         started=time.perf_counter()
-        evidence_mode=scenario_context.get('mapping_policy')=='sports_age_sex_urgency_evidence_v2'
-        if evidence_mode:
-            from persona_evac.llm.mapping_evidence import SPORTS_MAPPING_PROMPT
-            prompt=SPORTS_MAPPING_PROMPT
-        else:prompt=GROQ_MAPPING_PROMPT
-        self.settings={**self.local.settings,'system_prompt':prompt,'max_completion_tokens':1536 if evidence_mode else 512}
-        if evidence_mode:self.settings['evidence_guard_version']='direct_cues_literal_ids_v2'
+        self.settings={**self.local.settings,'system_prompt':MAPPING_PROMPT,'max_completion_tokens':1024,
+                       'mapping_policy':BASELINE_POLICY}
         key=self.cache.key(profile=profile,scenario_context=scenario_context,provider=self.source_name,
                            model=self.model,settings=self.settings)
         cached=self.cache.get(key)
-        if cached and evidence_mode:
-            from persona_evac.llm.mapping_evidence import validate_mapping_evidence
-            cached=validate_mapping_evidence(cached.model_dump(mode='json'),profile)
         if cached:
             self.records.append({'source':'ollama_cache','wall_s':time.perf_counter()-started,'persona_uuid':profile.uuid})
             return cached
-        payload={'persona':profile.model_dump(mode='json'),'scenario':scenario_context}
-        if evidence_mode:
-            from persona_evac.llm.mapping_evidence import validate_mapping_evidence,evidence_schema,evidence_candidates,expand_evidence_ids
-            candidates=evidence_candidates(profile)
-            payload={'persona':{k:v for k,v in profile.model_dump(mode='json').items() if k in {'uuid','age','sex','occupation'}},
-                     'original_evidence':candidates,'scenario':scenario_context}
-            for attempt in range(3):
-                data,metric=self.local.generate(prompt,payload,evidence_schema(profile,candidates),1536)
-                try:mapping=validate_mapping_evidence(expand_evidence_ids(data,candidates),profile);break
-                except ValueError as exc:
-                    if attempt==2:
-                        atomic_json(self.cache.directory/f'{key}.invalid.json',{'persona_uuid':profile.uuid,'response':data,'error':str(exc)})
-                        raise
-                    payload={**payload,'validation_error':str(exc),'previous_response':data,
-                             'repair_instruction':'원문과 일치하는 인용과 구체적인 이유로 다시 판단하세요.'}
-            metric['evidence_attempts']=attempt+1
-        else:
-            data,metric=self.local.generate(prompt,payload,BehaviorMapping.model_json_schema(),512)
-            mapping=BehaviorMapping.model_validate(data)
+        payload={'persona':profile.model_dump(mode='json',exclude={'uuid'}),
+                 'scenario':{k:v for k,v in scenario_context.items() if k not in {'mapping_policy','input_fields'}},
+                 'mapping_policy':BASELINE_POLICY}
+        for attempt in range(3):
+            data,metric=self.local.generate(MAPPING_PROMPT,payload,SCHEMA,1024)
+            try:mapping=validate_mapping(data);break
+            except ValueError as exc:
+                if attempt==2:
+                    atomic_json(self.cache.directory/f'{key}.invalid.json',{'persona_uuid':profile.uuid,'response':data,'error':str(exc)})
+                    raise
+                payload={**payload,'validation_error':str(exc),
+                         'repair_instruction':'반응·보행·친숙도 세 항목 각각에 유효한 level과 비어 있지 않은 한국어 근거 요약 assumption만 반환하세요.'}
+        metric['classification_attempts']=attempt+1
         self.cache.put(key,mapping)
         self.records.append({**metric,'persona_uuid':profile.uuid})
         atomic_json(self.cache.directory/f'{key}.timing.json',self.records[-1])

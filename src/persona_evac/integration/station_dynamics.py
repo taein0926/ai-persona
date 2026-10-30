@@ -27,6 +27,73 @@ def point(node):
     return (node["x"], node["y"])
 
 
+def connector_occupants(runtime, connectors):
+    """Snapshot membership before movement; retain runtime order for distance ties."""
+    occupants = {sid: [] for sid in connectors}
+    for r in runtime.values():
+        if r["phase"] == "on_stairs" and r["target"] in occupants:
+            occupants[r["target"]].append(r)
+    for group in occupants.values():
+        group.sort(key=lambda r: -r["stair_distance"])
+    return occupants
+
+
+def connector_admissions(runtime, connectors):
+    """Fresh counts after departures, decisions and new queue arrivals."""
+    waiting = {sid: [] for sid in connectors}
+    occupied = {sid: 0 for sid in connectors}
+    for r in runtime.values():
+        if r["phase"] == "queueing" and r["target"] in waiting:
+            waiting[r["target"]].append(r)
+        elif r["phase"] == "on_stairs" and r["target"] in occupied:
+            occupied[r["target"]] += 1
+    for group in waiting.values():
+        group.sort(key=lambda r: (r["arrived_at"], r["agent"]["agent_id"]))
+    return waiting, occupied
+
+
+def diagnose_people(runtime,before,areas,now,min_gap,overlap_steps,pair_history,rank_changes):
+    """원래 사람·쌍 순서를 유지하며 같은 영역의 진단 대상만 순회한다."""
+    active=[(aid,r) for aid,r in runtime.items() if aid in before]
+    groups={};offsets={}
+    for aid,r in active:groups.setdefault(r['area'],[]).append((aid,r))
+    for aid,a in active:
+        area=a['area'];index=offsets.get(area,0);offsets[area]=index+1
+        if not areas[area]['geometry'].covers(Point(a['pos'])):
+            raise RuntimeError('JuPedSim 에이전트가 보행 가능한 공간을 벗어났습니다.')
+        own_distance=None
+        for bid,b in groups[area][index+1:]:
+            gap=math.dist(a['pos'],b['pos'])-2*RADIUS
+            min_gap=min(min_gap,gap)
+            overlap_steps+=int(gap<-.01)
+            if a['phase']!='walking' or b['phase']!='walking' or a['target']!=b['target']:
+                continue
+            dest=a['goal']
+            if own_distance is None:own_distance=math.dist(a['pos'],dest)
+            diff=own_distance-math.dist(b['pos'],dest)
+            key=(aid,bid,area,a['target'])
+            order=1 if diff>.5 else -1 if diff<-.5 else 0
+            old_order=pair_history.get(key)
+            if order and old_order and order!=old_order:
+                rank_changes.append({'time_s':round(now+DT,8),'floor':a['floor'],
+                                     'passing_agent':aid if order<0 else bid,
+                                     'passed_agent':bid if order<0 else aid,'target_stair':a['target']})
+            if order:pair_history[key]=order
+    return min_gap,overlap_steps
+
+
+def append_motion_sample(r,now,pos):
+    """기존 합산 순서는 유지하고 이미 구한 구간 거리만 재사용한다."""
+    samples=r['motion_samples']
+    if 'motion_distances' not in r:
+        r['motion_distances']=deque((math.dist(a[1],b[1]) for a,b in zip(samples,list(samples)[1:])),maxlen=samples.maxlen-1)
+    distances=r['motion_distances']
+    if samples:distances.append(math.dist(samples[-1][1],pos))
+    samples.append((now,pos))
+    span=samples[-1][0]-samples[0][0]
+    return sum(distances)/span if span>0 else 0
+
+
 def make_simulation(geometry):
     return jps.Simulation(
         model=jps.AnticipationVelocityModel(rng_seed=SEED), geometry=geometry, dt=DT
@@ -62,6 +129,8 @@ def pedestrian_geometry(geometry):
 
 def can_intentionally_overtake(agent, effective_speed, fast_threshold):
     traits = (agent.get("experimental_profile") or {}).get("traits")
+    if traits and 'overtaking_tendency' in traits:
+        return traits['overtaking_tendency']['level'] in {'normal','high'} and effective_speed > fast_threshold
     if traits:
         return (
             traits["waiting_patience"]["level"] == "low"
@@ -298,21 +367,38 @@ def simulate(source, config, request, decision_provider=None):
     nodes = c["nodes"]
     stairs = {s["id"]: s for s in c["stairs"]}
     floors = {f["id"]: f for f in c["floors"]}
-    from persona_evac.integration.station_layout import view_geometry, display_stair_path
+    native=bool(c.get('jupedsim_connections',{}).get('enabled'))
+    network=None
+    if native:
+        from persona_evac.integration.station_connectors import compile_network,connector_landing,NativePassage
+        network=compile_network(c);nodes=network['nodes'];stairs=network['connectors']
+        c['nodes']=nodes
+        c['movement'].update(stairs='jupedsim_unfolded_branches',fare_gates='exclusive_capacity_one',
+                             stair_turns='engine_walked_landing_xy_with_slope_speed')
+        c['connection_topology']=[{'id':sid,'kind':s['kind'],'from_node':s['from_node'],'to_node':s['to_node'],
+                                  'branches':len(s['native_paths']),'capacity':s['capacity']} for sid,s in stairs.items()]
+        c['assumptions']=[a for a in c['assumptions'] if 'FIFO' not in a]
+        c['assumptions'].append('계단은 3D 경로 길이를 펼친 별도 2D JuPedSim 영역으로 보행하며 실제 XYZ 경로로 투영합니다. 개찰구는 통로별 한 명만 진입하며 출구 쪽이 막히면 점유를 유지합니다.')
+        c['assumptions'].append('회전하는 계단참은 실제 수평 경로를 JuPedSim에서 걸으며 높이와 경사 속도를 별도로 복원합니다. 직선 펼침 좌표를 꺾인 경로에 압축해 배치하지 않습니다.')
+    if native:
+        from persona_evac.integration.station_layout import attach_display_geometry
+        attach_display_geometry(c)
+    else:
+        from persona_evac.integration.station_layout import view_geometry, display_stair_path
 
-    c["display_stair_paths"] = {s["id"]: display_stair_path(c, s) for s in c["stairs"]}
-    c["display3d"] = {}
-    for fid, f in floors.items():
-        geom = floor_geometry(f)
-        c["display3d"][fid] = [
-            {
-                "outer": list(poly.exterior.coords),
-                "holes": [list(hole.coords) for hole in poly.interiors],
-            }
-            for poly in getattr(geom, "geoms", [geom])
-            if not poly.is_empty
-        ]
-    c["display3d_openings"] = {f"{i / 10:.1f}": view_geometry(c, i / 10) for i in range(10, 41)}
+        c["display_stair_paths"] = {s["id"]: display_stair_path(c, s) for s in c["stairs"]}
+        c["display3d"] = {}
+        for fid, f in floors.items():
+            geom = floor_geometry(f)
+            c["display3d"][fid] = [
+                {
+                    "outer": list(poly.exterior.coords),
+                    "holes": [list(hole.coords) for hole in poly.interiors],
+                }
+                for poly in getattr(geom, "geoms", [geom])
+                if not poly.is_empty
+            ]
+        c["display3d_openings"] = {f"{i / 10:.1f}": view_geometry(c, i / 10) for i in range(10, 41)}
     areas = {}
     area_specs = c.get(
         "areas",
@@ -322,14 +408,16 @@ def simulate(source, config, request, decision_provider=None):
             {"id": "hall", "floor": "B1"},
         ],
     )
+    if native:area_specs=network['area_specs']
     fire_settings = fire.meta["fire"] if fire else None
     for spec in area_specs:
         name = spec["id"]
-        geom = floor_geometry(floors[spec["floor"]], spec.get("region"))
+        geom = network['geometry'][name] if native else floor_geometry(floors[spec["floor"]], spec.get("region"))
         if fire and fire_settings["floor"] == spec["floor"]:
             x, y, w, h = fire_settings["rect"]
             geom = geom.difference(box(x, y, x + w, y + h))
-        geom = pedestrian_geometry(geom)
+        if not native or fire:geom = pedestrian_geometry(geom)
+        center_geometry = geom.buffer(-RADIUS - 0.02)
         sim = make_simulation(geom)
         targets = [sid for sid, s in stairs.items() if nodes[s["from_node"]].get("area") == name]
         stages, lanes = ({}, {})
@@ -342,10 +430,10 @@ def simulate(source, config, request, decision_provider=None):
             s["entry_lane_numbers"] = []
             for i in range(n):
                 offset = (i - (n - 1) / 2) * s["width_m"] / n
-                pos = tuple((center[j] + offset * tangent[j] for j in (0, 1)))
-                if not geom.buffer(-RADIUS - 0.02).covers(Point(pos)):
+                pos = tuple(s['native_lane_specs'][i]['entry'][:2]) if native else tuple((center[j] + offset * tangent[j] for j in (0, 1)))
+                if not center_geometry.covers(Point(pos)):
                     continue
-                stage = sim.add_waypoint_stage(pos, 0.35)
+                stage = sim.add_waypoint_stage(pos, 0.07 if native else 0.35)
                 journey = sim.add_journey(jps.JourneyDescription([stage]))
                 lanes[sid].append((journey, stage, pos))
                 s["entry_lane_numbers"].append(i)
@@ -355,7 +443,7 @@ def simulate(source, config, request, decision_provider=None):
                 raise ValueError(f"{sid}: 계단 진입점이 보행 공간 안에 없습니다")
             stages[sid] = lanes[sid][0][:2]
             s["active_entry_lanes"] = len(lanes[sid])
-        areas[name] = {"sim": sim, "geometry": geom, "stages": stages, "lanes": lanes}
+        areas[name] = {"sim": sim, "geometry": geom, "center_geometry": center_geometry, "stages": stages, "lanes": lanes}
     agents = deepcopy(base["agents"])
     c["population"] = {
         "count": len(agents),
@@ -372,6 +460,7 @@ def simulate(source, config, request, decision_provider=None):
     stair_gap = 1.0
 
     def landing_for(s, lane):
+        if native:return connector_landing(s,nodes,lane)
         dest = dict(nodes[s["to_node"]])
         n = s["parallel_lanes"]
         tangent = s.get("portal_tangent", [0, 1])
@@ -387,8 +476,7 @@ def simulate(source, config, request, decision_provider=None):
         for option, lane in zip(area["lanes"][sid], s["entry_lane_numbers"]):
             dest = landing_for(s, lane)
             if dest["floor"] != "OUTSIDE" and (
-                not areas[dest.get("area", "hall")]["geometry"]
-                .buffer(-RADIUS - 0.02)
+                not areas[dest.get("area", "hall")]["center_geometry"]
                 .covers(Point(point(dest)))
             ):
                 continue
@@ -396,6 +484,9 @@ def simulate(source, config, request, decision_provider=None):
             numbers.append(lane)
         s["physical_valid_lanes"] = numbers
         s["active_entry_lanes"] = len(valid)
+        if native and not valid:
+            raise ValueError(f'{sid}: 유효한 JuPedSim 연결 진입·도착 지점이 없습니다.')
+    native_passages={sid:NativePassage(s,make_simulation,parameters,RADIUS) for sid,s in stairs.items()} if native else {}
     min_gap = math.inf
     overlap_steps = 0
     pair_history = {}
@@ -456,27 +547,47 @@ def simulate(source, config, request, decision_provider=None):
     ]
     classification_assumptions=list(PRIVATE_POLICY['assumptions'])
     if private.profiles_provider.method=='full_persona':
-        classification_assumptions[1]='페르소나의 전체 원문 필드를 LLM이 해석하며 직접 서술·문맥 추정·정보 부족 가설을 구분합니다. 정보 부족도 LLM이 등급을 추정하며 분포·시드로 대체하지 않습니다.'
+        classification_assumptions[0]='6개 성향은 실험용 가정이며 실제 성격·위기 대응 능력의 측정값이 아닙니다.'
+        classification_assumptions[1]='페르소나 전체를 LLM이 해석해 여섯 성향의 등급과 판단 근거만 생성합니다. 후속 상황 판단에는 성향 등급만 전달합니다. 타인 추종성은 본인이 관측한 이동 방향에만 적용합니다.'
+        classification_assumptions[-1]='추월 적극성이 보통·높음이며 목표 보행 속도가 기준보다 빠르면 추월 의도를 허용합니다. 실행은 실제 상대속도·빈 공간·충돌 조건으로 제한합니다.'
+    from persona_evac.llm.baseline_profile import POLICY as BASELINE_POLICY
+    if any(((a.get('provenance') or {}).get('mapping') or {}).get('policy') == BASELINE_POLICY for a in agents):
+        classification_assumptions[5]='역사 친숙도는 LLM이 페르소나 전체 문맥에서 초행·구조에 익숙함으로 분류합니다. 익숙한 사람은 실제 역 모델의 모든 계단 위치·층 연결을 기억하지만 현재 위험·혼잡·통행 상태나 전체 보행 경로는 제공받지 않습니다.'
     c["assumptions"] += classification_assumptions
     now = 0.0
 
     def add_person(r, area_name, pos, target):
         area = areas[area_name]
-        if not area["geometry"].buffer(-RADIUS - 0.02).covers(Point(pos)):
+        reserved=r.get('landing_guard') if native else None
+        if not area["center_geometry"].covers(Point(pos)):
             raise ValueError("시작점 또는 계단 도착점이 보행 가능한 공간 밖에 있습니다.")
-        if any((math.dist(pos, a.position) < 2 * RADIUS + 0.08 for a in area["sim"].agents())):
+        if any((math.dist(pos, a.position) < 2 * RADIUS + 0.08 for a in area["sim"].agents()
+                if not reserved or a.id!=reserved['jid'])):
             return False
         goal = pos
         stage = area["sim"].add_waypoint_stage(pos, 0.2)
         journey = area["sim"].add_journey(jps.JourneyDescription([stage]))
-        jid = area["sim"].add_agent(
-            parameters(pos, journey, stage, r["agent"]["desired_speed_mps"])
-        )
+        if reserved:
+            jid=reserved['jid'];area['sim'].switch_agent_journey(jid,journey,stage)
+            r.pop('landing_guard')
+        else:
+            jid = area["sim"].add_agent(parameters(pos, journey, stage, r["agent"]["desired_speed_mps"]))
         r.update(area=area_name, jid=jid, target=target, pos=pos, goal=goal, goal_stage=stage)
         r["motion_samples"] = deque([(now, pos)], maxlen=21)
+        r["motion_distances"] = deque(maxlen=20)
         r["observed_speed_mps"] = 0
         r["entry_lane"] = None
         r["goal_is_portal"] = False
+        return True
+
+    def reserve_landing(r,dest):
+        area=areas[dest['area']];pos=point(dest)
+        if not area['center_geometry'].covers(Point(pos)):return False
+        if any(math.dist(pos,a.position)<2*RADIUS+.08 for a in area['sim'].agents()):return False
+        stage=area['sim'].add_waypoint_stage(pos,.07)
+        journey=area['sim'].add_journey(jps.JourneyDescription([stage]))
+        jid=area['sim'].add_agent(parameters(pos,journey,stage,0.))
+        r['landing_guard']={'area':dest['area'],'jid':jid,'position':pos}
         return True
 
     for i, a in enumerate(agents):
@@ -540,6 +651,9 @@ def simulate(source, config, request, decision_provider=None):
 
     def location(r):
         if r["phase"] == "on_stairs":
+            if native:
+                _,_,xyz=native_passages[r['target']].sample(r['agent']['agent_id'])
+                return {'floor':r['floor'],'x':xyz[0],'y':xyz[1]}
             p = r["passage"]
             fraction = min(1, max(0, (now - p["entry"]) / stairs[r["target"]]["travel_time_s"]))
             end = nodes[stairs[r["target"]]["to_node"]]
@@ -573,12 +687,29 @@ def simulate(source, config, request, decision_provider=None):
         max_time = min(max_time, float(fire.times[-1]) - fire.offset)
     for tick in range(int(max_time / DT)):
         now = round(tick * DT, 8)
+        occupants_by_connector = connector_occupants(runtime, stairs)
         for sid, s in stairs.items():
-            occupants = sorted(
-                [r for r in runtime.values() if r["phase"] == "on_stairs" and r["target"] == sid],
-                key=lambda r: -r["stair_distance"],
-            )
-            stair_speed = s["speed_mps"] * stair_speed_factor(s, len(occupants))
+            occupants = occupants_by_connector[sid]
+            stair_speed = s["speed_mps"] * (1 if s.get('kind')=='fare_gate' else stair_speed_factor(s, len(occupants)))
+            if native:
+                passage=native_passages[sid]
+                passage.advance(stair_speed/s['speed_mps'])
+                for r in occupants:
+                    progress,lateral,xyz=passage.sample(r['agent']['agent_id'])
+                    spec=s['native_lane_specs'][r['stair_lane']]
+                    length=passage.branches[spec['branch']]['length']
+                    guard=r.get('source_guard')
+                    if guard and progress*length>=2*RADIUS+.08:
+                        areas[guard['area']]['sim'].mark_agent_for_removal(guard['jid']);r.pop('source_guard')
+                    if (1-progress)*length<=1.15:
+                        dest=landing_for(s,r['stair_lane'])
+                        if dest['floor']=='OUTSIDE' or r.get('landing_guard') or reserve_landing(r,dest):
+                            passage.release_landing(r['agent']['agent_id'])
+                    r['stair_distance']=progress*s['length_m']
+                    r['passage']['motion'].append([now,progress])
+                    r['passage']['native_motion'].append([now,*xyz])
+                    r['passage']['native_engine_motion'].append([now,*passage.engine_position(r['agent']['agent_id'])])
+                continue
             fronts = {}
             for r in occupants:
                 lane = r["stair_lane"]
@@ -591,7 +722,8 @@ def simulate(source, config, request, decision_provider=None):
         for r in runtime.values():
             if (
                 r["phase"] != "on_stairs"
-                or r["stair_distance"] < stairs[r["target"]]["length_m"] - 1e-08
+                or (not native_passages[r['target']].ready(r['agent']['agent_id']) if native
+                    else r["stair_distance"] < stairs[r["target"]]["length_m"] - 1e-08)
             ):
                 continue
             s = stairs[r["target"]]
@@ -611,13 +743,19 @@ def simulate(source, config, request, decision_provider=None):
                     passing=False,
                     pace="continue",
                 )
+            if native:native_passages[s['id']].release(r['agent']['agent_id'])
             r["passage"]["exit"] = now
             r["passage"]["landing_wait_s"] = max(0, now - r["ready_at"])
+            if native:
+                z=next((f['elevation_m'] for f in c['floors'] if f['id']==dest['floor']),8.)
+                r['passage']['native_motion'].append([now,dest['x'],dest['y'],z])
             log_segment(
-                r, r["passage"]["entry"], now, r["stair_start"], dict(dest), "on_stairs", s["id"]
+                r, r["passage"]["entry"], now, r["stair_start"], dict(dest),
+                'on_gate' if s.get('kind')=='fare_gate' else "on_stairs", s["id"]
             )
             r["agent"]["segments"][-1]["stair_motion"] = r["passage"]["motion"]
             r["agent"]["segments"][-1]["stair_lane"] = r["stair_lane"]
+            if native:r['agent']['segments'][-1]['native_motion']=r['passage']['native_motion']
             if r["phase"] != "evacuated":
                 private.transferred(r, dest_area, dest["floor"], point(dest), now, s["id"])
             else:
@@ -656,17 +794,13 @@ def simulate(source, config, request, decision_provider=None):
             if (
                 r["phase"] == "walking"
                 and r.get("goal_is_portal", True)
-                and (math.dist(r["pos"], r["goal"]) < 0.6)
+                and (math.dist(r["pos"], r["goal"]) < (0.10 if native else 0.6))
             ):
                 r.update(phase="queueing", arrived_at=now)
+        waiting_by_connector, occupied_by_connector = connector_admissions(runtime, stairs)
         for sid, s in stairs.items():
-            waiting = sorted(
-                [r for r in runtime.values() if r["phase"] == "queueing" and r["target"] == sid],
-                key=lambda r: (r["arrived_at"], r["agent"]["agent_id"]),
-            )
-            occupied = sum(
-                (r["phase"] == "on_stairs" and r["target"] == sid for r in runtime.values())
-            )
+            waiting = waiting_by_connector[sid]
+            occupied = occupied_by_connector[sid]
             if (
                 waiting
                 and occupied < s["capacity"]
@@ -676,10 +810,12 @@ def simulate(source, config, request, decision_provider=None):
                 for lane in range(s["parallel_lanes"]):
                     dest = landing_for(s, lane)
                     if dest["floor"] != "OUTSIDE" and (
-                        not areas[dest.get("area", "hall")]["geometry"]
-                        .buffer(-RADIUS - 0.02)
+                        not areas[dest.get("area", "hall")]["center_geometry"]
                         .covers(Point(point(dest)))
                     ):
+                        continue
+                    if native:
+                        if native_passages[sid].can_enter(lane):free.append(lane)
                         continue
                     if now - lane_entry.get((sid, lane), -1000000.0) < stair_gap / s["speed_mps"]:
                         continue
@@ -701,11 +837,16 @@ def simulate(source, config, request, decision_provider=None):
                     continue
                 r = ready
                 lane = r["entry_lane"]
+                if native and not native_passages[sid].enter(r['agent']['agent_id'],lane,s['speed_mps']):
+                    continue
                 r.update(stair_lane=lane, stair_distance=0)
                 r["stair_destination"] = landing_for(s, lane)
                 lane_entry[sid, lane] = now
                 r["stair_start"] = location(r)
-                areas[r["area"]]["sim"].mark_agent_for_removal(r["jid"])
+                if native:
+                    areas[r['area']]['sim'].agent(r['jid']).model.desired_speed=0
+                    r['source_guard']={'area':r['area'],'jid':r['jid']}
+                else:areas[r["area"]]["sim"].mark_agent_for_removal(r["jid"])
                 r.update(phase="on_stairs", ready_at=now + s["travel_time_s"])
                 p = {
                     "agent_id": r["agent"]["agent_id"],
@@ -717,6 +858,12 @@ def simulate(source, config, request, decision_provider=None):
                     "minimum_spacing_m": stair_gap,
                     "motion": [[now, 0.0]],
                 }
+                if native:
+                    _,_,xyz=native_passages[sid].sample(r['agent']['agent_id'])
+                    branch=native_passages[sid].branches[s['native_lane_specs'][lane]['branch']]
+                    p.update(kind=s['kind'],native_motion=[[now,*xyz]],engine='jupedsim',
+                             coordinate_model='bent_planar' if branch.get('bent_path') else 'unfolded_straight',
+                             native_engine_motion=[[now,*native_passages[sid].engine_position(r['agent']['agent_id'])]])
                 passages.append(p)
                 r["passage"] = p
                 r["agent"]["stair_wait_s"] += now - r["arrived_at"]
@@ -870,14 +1017,7 @@ def simulate(source, config, request, decision_provider=None):
             r = runtime[aid]
             r["pos"] = tuple(areas[r["area"]]["sim"].agent(r["jid"]).position)
             r["agent"]["distance_walked_m"] += math.dist((old["x"], old["y"]), r["pos"])
-            samples = r["motion_samples"]
-            samples.append((now + DT, r["pos"]))
-            span = samples[-1][0] - samples[0][0]
-            r["observed_speed_mps"] = (
-                sum((math.dist(a[1], b[1]) for a, b in zip(samples, list(samples)[1:]))) / span
-                if span > 0
-                else 0
-            )
+            r["observed_speed_mps"] = append_motion_sample(r,now + DT,r["pos"])
             log_segment(
                 r,
                 now,
@@ -915,35 +1055,7 @@ def simulate(source, config, request, decision_provider=None):
                 ):
                     overtakes.append({**event, "time_s": round(now + DT, 8)})
                 pending_passes.remove(event)
-        active = [(aid, r) for aid, r in runtime.items() if aid in before]
-        for index, (aid, a) in enumerate(active):
-            if not areas[a["area"]]["geometry"].covers(Point(a["pos"])):
-                raise RuntimeError("JuPedSim 에이전트가 보행 가능한 공간을 벗어났습니다.")
-            for bid, b in active[index + 1 :]:
-                if a["area"] != b["area"]:
-                    continue
-                gap = math.dist(a["pos"], b["pos"]) - 2 * RADIUS
-                min_gap = min(min_gap, gap)
-                overlap_steps += int(gap < -0.01)
-                if a["phase"] != "walking" or b["phase"] != "walking" or a["target"] != b["target"]:
-                    continue
-                dest = a["goal"]
-                diff = math.dist(a["pos"], dest) - math.dist(b["pos"], dest)
-                key = (aid, bid, a["area"], a["target"])
-                order = 1 if diff > 0.5 else -1 if diff < -0.5 else 0
-                old_order = pair_history.get(key)
-                if order and old_order and (order != old_order):
-                    rank_changes.append(
-                        {
-                            "time_s": round(now + DT, 8),
-                            "floor": a["floor"],
-                            "passing_agent": aid if order < 0 else bid,
-                            "passed_agent": bid if order < 0 else aid,
-                            "target_stair": a["target"],
-                        }
-                    )
-                if order:
-                    pair_history[key] = order
+        min_gap,overlap_steps=diagnose_people(runtime,before,areas,now,min_gap,overlap_steps,pair_history,rank_changes)
     else:
         now = max_time
         for r in runtime.values():
@@ -955,12 +1067,13 @@ def simulate(source, config, request, decision_provider=None):
                     now,
                     r["stair_start"],
                     nodes[stairs[sid]["to_node"]],
-                    "on_stairs",
+                    'on_gate' if stairs[sid].get('kind')=='fare_gate' else "on_stairs",
                     sid,
                 )
                 r["agent"]["segments"][-1].update(
                     stair_motion=r["passage"]["motion"], stair_lane=r["stair_lane"]
                 )
+                if native:r['agent']['segments'][-1]['native_motion']=r['passage']['native_motion']
     unique_passes = {}
     for event in overtakes:
         key = (event["passing_agent"], event["passed_agent"], event["area"], event["target_stair"])
@@ -1003,7 +1116,7 @@ def simulate(source, config, request, decision_provider=None):
         schema_version="station-1",
         backend="jupedsim_avm_layered",
         backend_notice=c["name"]
-        + " · JuPedSim 회피·추월 + 계단 시간·용량 연결 · "
+        + (" · JuPedSim 층별·계단 보행 + 개찰구별 1인 통과 · " if native else " · JuPedSim 회피·추월 + 계단 시간·용량 연결 · ")
         + ("FDS 연기·온도 연결" if fire else "화재 끄기 실행"),
         scenario_hash=hashlib.sha256(canonical.encode()).hexdigest(),
         agents=agents,

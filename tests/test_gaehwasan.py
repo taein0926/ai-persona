@@ -8,10 +8,22 @@ from shapely.geometry import Point
 from persona_evac.integration.station import StationRequest, simulate_station
 from persona_evac.integration.station_geometry import floor_geometry
 from station_fixtures import source
+from persona_evac.integration.station_connectors import compile_network,connector_landing
 
 
 def station():
     return json.loads(Path("configs/scenarios/gaehwasan.json").read_text(encoding="utf-8"))
+
+
+def valid_native_lanes(network, s):
+    source=network['nodes'][s['from_node']]
+    valid=[]
+    for lane,spec in enumerate(s['native_lane_specs']):
+        dest=connector_landing(s,network['nodes'],lane)
+        if not network['geometry'][source['area']].buffer(-.24).covers(Point(spec['entry'][:2])):continue
+        if dest['floor']!='OUTSIDE' and not network['geometry'][dest['area']].buffer(-.24).covers(Point(dest['x'],dest['y'])):continue
+        valid.append(lane)
+    return valid
 
 
 def test_drawing_calibration_width_evidence_and_body_clear_spawn():
@@ -22,7 +34,11 @@ def test_drawing_calibration_width_evidence_and_body_clear_spawn():
     assert {f["id"] for f in c["floors"]}=={"B2","B1","F1"}
     for s in c["stairs"]:
         e=s["width_reference"]
-        assert s["width_m"] == pytest.approx(round(math.dist(*e["pdf_endpoints"])*scale-.2,2))
+        if s['kind']=='exit':
+            assert s['exit_width_m']==pytest.approx(math.dist(*s['exit_boundary_xy']))
+            assert .44<s['width_m']<s['exit_width_m']
+        else:
+            assert s["width_m"] == pytest.approx(round(math.dist(*e["pdf_endpoints"])*scale-.2,2))
     f=c["floors"][0]
     for spawn in c["spawn_points"]:
         region=0 if spawn["area"]=="A" else 1
@@ -47,18 +63,14 @@ def test_three_levels_conserve_personas_and_respect_metric_geometry():
         for prev,nxt in zip(a["segments"],a["segments"][1:]):
             assert prev["end"] == pytest.approx(nxt["start"])
             assert prev["to"] == nxt["from"]
+    network=compile_network(r['scenario'])
     for s in r["scenario"]["stairs"]:
-        assert s["width_basis"]=="drawing_estimate"
-        assert 0<s["active_entry_lanes"]<=s["parallel_lanes"]
-        assert len(s['physical_valid_lanes'])==s['active_entry_lanes']
-        assert set(s['physical_valid_lanes'])<=set(s['entry_lane_numbers'])
-        dest=r['scenario']['nodes'][s['to_node']]
-        if dest['floor']!='OUTSIDE':
-            for lane in s['physical_valid_lanes']:
-                offset=(lane-(s['parallel_lanes']-1)/2)*s['width_m']/s['parallel_lanes']
-                x=dest['x']+offset*s['portal_tangent'][0];y=dest['y']+offset*s['portal_tangent'][1]
-                assert geoms[dest['floor']].buffer(-.24).covers(Point(x,y))
+        assert s["width_basis"]==('assumed' if s['kind']=='exit' else 'drawing_estimate')
+        compiled=network['connectors'][s['id']]
+        valid=valid_native_lanes(network,compiled)
+        assert 0<len(valid)<=compiled['parallel_lanes']
         ps=sorted((p for p in r["passages"] if p["stair_id"]==s["id"]),key=lambda p:p["entry"])
+        assert all(p['lane'] in valid and p['engine']=='jupedsim' for p in ps)
         for a,b in zip(ps,ps[1:]):
             assert b["entry"]-a["entry"] >= 1/s["entry_rate_per_s"]-1e-8
 
@@ -70,7 +82,8 @@ def test_narrow_override_reduces_entry_lanes_and_marks_assumption():
     override["width_m"]=.65
     r=simulate_station(source(),c,StationRequest(stairs=[override],duration_s=5))
     changed=next(s for s in r["scenario"]["stairs"] if s["id"]==override["id"])
-    assert changed["active_entry_lanes"]==1
+    network=compile_network(r['scenario'])
+    assert len(valid_native_lanes(network,network['connectors'][override['id']]))==1
     assert changed["width_basis"]=="assumed"
     assert len(r['agents'])==10
 

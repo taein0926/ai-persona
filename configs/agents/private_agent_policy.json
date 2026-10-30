@@ -8,12 +8,12 @@
   "profile_classification": {
     "default_method": "keyword_candidates",
     "full_persona": {
-      "version": "full_persona_traits_v1",
-      "prompt_version": "full_persona_prompt_v1",
+      "version": "full_persona_traits_v3",
+      "prompt_version": "full_persona_prompt_v3",
       "num_ctx": 16384,
       "max_output_tokens": 2048,
       "max_validation_attempts": 3,
-      "evidence_levels": ["direct", "contextual", "hypothesis"]
+      "following_bonus_seconds": {"low": 0, "normal": 6, "high": 18}
     }
   },
   "experiment_seed": 20261027,

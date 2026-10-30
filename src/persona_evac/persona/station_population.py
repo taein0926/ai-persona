@@ -1,24 +1,79 @@
-"""Prepare unique Nemotron people and their individual, cached Qwen mappings."""
+"""고유 Nemotron 인물과 모델별 사전 분류·실측 기반 초기값을 준비한다."""
 from __future__ import annotations
 
 import json
 import os
 import time
+from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
 
 from persona_evac.empirical import EmpiricalResolver, load_empirical_records
 from persona_evac.empirical.resolver import _quantile
 from persona_evac.hashing import sha256_file, sha256_value
-from persona_evac.llm import GroqProvider, OllamaProvider
+from persona_evac.llm import OllamaProvider
+from persona_evac.llm.baseline_profile import POLICY as BASELINE_POLICY
 from persona_evac.persona.sampling import load_personas
 from persona_evac.schemas import PersonaProfile, SocialMode
 
-MAPPING_FIELDS = ("uuid", "age", "sex", "occupation", "persona", "professional_persona",
-                  "sports_persona", "hobbies_and_interests", "skills_and_expertise")
 CONTEXT = {"scenario": "지하철역 화재 대피", "multiple_exits": True, "incident": "fire",
-           "mapping_policy": "sports_age_sex_urgency_evidence_v2", "role": "visitor", "social_mode": "individual",
-           "familiarity": "discovery", "input_fields": list(MAPPING_FIELDS)}
+           "station": "개화산역", "line": "5호선", "district": "서울 강서구",
+           "mapping_policy": BASELINE_POLICY, "role": "visitor", "social_mode": "individual",
+           "familiarity": "discovery", "input_policy": "all_persona_fields_except_uuid"}
+
+
+def _mapping_model(provider):
+    return {'model':provider.model,
+            'model_digest':getattr(getattr(provider,'local',None),'digest',None)
+                           or getattr(provider,'settings',{}).get('model_digest')}
+
+
+def refresh_population(source, count, provider=None, empirical_path=None):
+    """Refresh old baselines in memory on an explicit calculation, retaining raw input."""
+    selected = sorted(source['variants']['C'], key=lambda a: a['agent_slot'])[:count]
+    if len(selected) != count:
+        raise ValueError('요청한 인원만큼 초기 페르소나가 준비되지 않았습니다.')
+    provider = provider or OllamaProvider(cache_dir=Path(os.environ.get('PERSONA_EVAC_OUTPUT', 'output'))/'gaehwasan/mapping_cache/ollama')
+    identity = _mapping_model(provider)
+    def current(agent):
+        mapping = agent.get('provenance',{}).get('mapping',{})
+        model = mapping.get('source_ref',source.get('provenance',{}).get('model'))
+        digest = mapping.get('model_digest')
+        if digest is None and model==source.get('provenance',{}).get('model'):
+            digest = source.get('provenance',{}).get('mapping_settings',{}).get('model_digest')
+        return mapping.get('policy')==BASELINE_POLICY and {'model':model,'model_digest':digest}==identity
+    pending = [a for a in selected if not current(a)]
+    if not pending:
+        return source
+    empirical_path = Path(empirical_path or pending[0]['provenance']['empirical']['source_ref'])
+    resolver = EmpiricalResolver(load_empirical_records(empirical_path), source['provenance']['snapshot']['selection_seed'])
+    updated = deepcopy(source)
+    by_slot = {a['agent_slot']: a for a in updated['variants']['C']}
+    for original in pending:
+        agent = by_slot[original['agent_slot']]
+        profile = PersonaProfile.model_validate(agent['persona'])
+        mapping = provider.map(profile, CONTEXT)
+        empirical = resolver.resolve(persona_uuid=profile.uuid, variant='C', treatment=SocialMode.INDIVIDUAL,
+                                     response=mapping.response_tendency, speed=mapping.speed_tendency)
+        fields = profile.model_dump(mode='json', exclude={'uuid'})
+        agent.update(mapping=mapping.model_dump(mode='json'), mapping_source=provider.source_name,
+                     empirical=empirical.model_dump(mode='json'), pre_movement_s=empirical.response_time_s,
+                     desired_speed_mps=empirical.desired_speed_mps)
+        agent.pop('classification_pending',None)
+        agent['provenance']['mapping'] = {'source_kind':'llm', 'source_ref':provider.model,
+            'model_digest':identity['model_digest'],
+            'record_id':profile.uuid, 'policy':BASELINE_POLICY, 'input_fields':list(fields),
+            'input_hash':sha256_value(fields), 'artifact_hash':sha256_value(agent['mapping'])}
+        agent['provenance']['empirical'] = {'source_kind':'empirical', 'source_ref':str(empirical_path),
+            'response_record_id':empirical.response_record_id, 'speed_record_id':empirical.speed_record_id}
+    updated['provenance']['baseline_refresh'] = {'policy':BASELINE_POLICY, 'count':len(pending),
+        **identity, 'empirical_source_hash':sha256_file(empirical_path),
+        'mapping_settings':getattr(provider, 'settings', {}), 'mapping_timings':getattr(provider, 'records', [])}
+    if all(current(agent) for agent in updated['variants']['C']):
+        updated['provenance'].update(model=provider.model, mapping_settings=getattr(provider,'settings',{}),
+                                     mapping_context=CONTEXT, mapping_timings=getattr(provider,'records',[]))
+        updated['provenance']['classification_status']='ready'
+    return updated
 
 
 def prepare_population(snapshot: Path, empirical_path: Path, output: Path, provider=None) -> Path:
@@ -28,15 +83,16 @@ def prepare_population(snapshot: Path, empirical_path: Path, output: Path, provi
     if metadata["count"] != len(profiles) or metadata["records_hash"] != sha256_value(records):
         raise ValueError("Nemotron snapshot metadata does not match its records")
     started=time.perf_counter()
-    provider = provider or (OllamaProvider(cache_dir=output.parent/'mapping_cache'/'ollama')
-                           if os.environ.get('LLM_PROVIDER','ollama')=='ollama'
-                           else GroqProvider(cache_dir=output.parent/'mapping_cache',max_retries=10))
+    if provider is None:
+        if os.environ.get('LLM_PROVIDER', 'ollama') != 'ollama':
+            raise ValueError('페르소나 준비는 로컬 Ollama만 지원합니다. LLM_PROVIDER=ollama를 사용하세요.')
+        provider = OllamaProvider(cache_dir=output.parent/'mapping_cache'/'ollama')
     empirical_records=load_empirical_records(empirical_path)
     resolver = EmpiricalResolver(empirical_records, int(metadata["selection_seed"]))
     agents = []
     for slot, profile in enumerate(profiles):
-        # Preserve the full original record; send explicitly recorded behavior-relevant fields.
-        mapping_input = PersonaProfile.model_validate({k: records[slot][k] for k in MAPPING_FIELDS if k in records[slot]})
+        mapping_input = profile
+        input_fields = [k for k in records[slot] if k != 'uuid']
         mapping = provider.map(mapping_input, CONTEXT)
         empirical = resolver.resolve(persona_uuid=profile.uuid, variant="C", treatment=SocialMode.INDIVIDUAL,
                                      response=mapping.response_tendency, speed=mapping.speed_tendency)
@@ -45,7 +101,9 @@ def prepare_population(snapshot: Path, empirical_path: Path, output: Path, provi
                         "record_id": profile.uuid, "artifact_hash": sha256_value(records[slot]),
                         "method": metadata.get("sampling", "snapshot without replacement"), "version": metadata["revision"]},
             "mapping": {"source_kind": "llm", "source_ref": provider.model, "record_id": profile.uuid,
-                        "input_fields": list(MAPPING_FIELDS), "input_hash": sha256_value(mapping_input.model_dump(mode="json")),
+                        "model_digest": _mapping_model(provider)['model_digest'],
+                        "policy": BASELINE_POLICY, "input_fields": input_fields,
+                        "input_hash": sha256_value(mapping_input.model_dump(mode="json", exclude={'uuid'})),
                         "artifact_hash": sha256_value(mapping.model_dump(mode="json"))},
             "empirical": {"source_kind": "empirical", "source_ref": str(empirical_path),
                           "response_record_id": empirical.response_record_id, "speed_record_id": empirical.speed_record_id},

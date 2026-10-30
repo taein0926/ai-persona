@@ -30,8 +30,7 @@ def test_mapping_local_schema_cache_and_digest_isolation(tmp_path):
     calls=[]
     def mapping(body):
         calls.append(body)
-        return {'response_tendency':'normal','speed_tendency':'normal',
-                'reasoning_summary':{'response_tendency':'근거 부족으로 보통 가정','speed_tendency':'근거 부족으로 보통 가정'}}
+        return {**{key:{'level':'normal','assumption':'전체 문맥에서 보통으로 추정합니다.'} for key in ('response_tendency','speed_tendency')},'familiarity':{'level':'first_visit','assumption':'생활 문맥에서 초행으로 판단했습니다.'}}
     p=OllamaProvider(tmp_path,client(mapping))
     profile=PersonaProfile(uuid='a',age=32)
     assert p.map(profile,{})==p.map(profile,{})
@@ -53,8 +52,7 @@ def test_launcher_backend_profile_separates_caches_but_restart_metadata_does_not
     calls=[]
     def mapping(body):
         calls.append(body)
-        return {'response_tendency':'normal','speed_tendency':'normal',
-                'reasoning_summary':{'response_tendency':'근거 부족으로 보통 가정','speed_tendency':'근거 부족으로 보통 가정'}}
+        return {**{key:{'level':'normal','assumption':'전체 문맥에서 보통으로 추정합니다.'} for key in ('response_tendency','speed_tendency')},'familiarity':{'level':'first_visit','assumption':'생활 문맥에서 초행으로 판단했습니다.'}}
     profile=PersonaProfile(uuid='a',age=32)
     def provider(backend,pid):
         runtime.write_text(json.dumps({'version':1,'server_pid':pid,'started_at':str(pid),

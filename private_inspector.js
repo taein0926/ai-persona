@@ -1,115 +1,175 @@
 'use strict';
-const traitNames={crowd_avoidance:'혼잡 회피',waiting_patience:'대기 인내',risk_avoidance:'위험 회피',exploration:'탐색 적극성'};
+const traitNames={crowd_avoidance:'혼잡 회피',waiting_patience:'대기 인내',risk_avoidance:'위험 회피',exploration:'탐색 적극성',social_following:'타인 추종성',overtaking_tendency:'추월 적극성'};
 const traitLevels={low:'낮음',normal:'보통',high:'높음'};
-const priorityNames={crowding:'혼잡 회피',patience:'대기 인내',risk:'위험 회피',explore:'탐색',time:'아는 경로의 이동 부담',experience:'본인 경험',environment:'현재 관측'};
+const priorityNames={crowding:'혼잡 회피',patience:'대기 인내',risk:'위험 회피',explore:'탐색',follow:'주변 이동 따르기',time:'아는 경로의 이동 부담',experience:'본인 경험',environment:'현재 관측'};
 const smokeNames={clear:'뚜렷한 연기 없음',light:'옅은 연기',dense:'짙은 연기',opaque:'시야를 가리는 연기'};
 const heatNames={normal:'평상시 열감',warm:'따뜻한 열감',hot:'강한 열감',unknown:'열감 미관측'};
-const causeNames={smoke_limits_observed_navigation:'연기와 관측 범위 안에서 다음 경로를 확보하지 못함',observed_congestion_or_local_stall:'국소 혼잡·이동 정체',still_moving_at_time_limit:'계산 종료 시점에도 이동 중',stair_or_landing_blocked:'계단 또는 도착부에서 정체',local_map_discretization_or_contact:'관측 격자 또는 벽 접촉으로 다음 경로 미확보',no_observed_reachable_frontier_or_portal:'아는 공간에서 접근 가능한 다음 목표 없음',known_path_not_currently_visible:'기억한 경로가 현재 보이지 않음'};
-const navSources={personal_rule_after_observation:'새 관측에 따른 기본 탐색',navigation_for_last_model_strategy:'직전 Qwen 전략을 개인 지도에 적용',private_rule_after_blocked_experience:'본인의 막힌 경험에 따른 기본 재탐색',model_strategy_resolution:'Qwen 전략의 목표 변환',private_fallback:'응답 실패 후 개인 지식으로 선택'};
 function perceivedText(h){return h?`${smokeNames[h.smoke]||'연기 미관측'} · ${heatNames[h.heat]||'열감 미관측'}`:'현재 상태 미관측';}
+let privatePlayback=null,timeIndexes=new WeakMap();
+function resetPrivatePlayback(data){
+  privatePlayback={data,people:new WeakMap(),groups:{}};timeIndexes=new WeakMap();
+  for(const name of ['decisions','navigation_updates']){
+    const groups=new Map();
+    for(const row of data[name]||[]){if(!groups.has(row.agent_id))groups.set(row.agent_id,[]);groups.get(row.agent_id).push(row);}
+    privatePlayback.groups[name]=groups;
+  }
+}
+function ensurePrivatePlayback(){if(privatePlayback?.data!==state.data)resetPrivatePlayback(state.data);return privatePlayback;}
+function timeIndex(rows){
+  let index=timeIndexes.get(rows);
+  if(!index||index.length!==rows.length){
+    index={length:rows.length,ordered:rows.every((r,i)=>Number.isFinite(r.time_s)&&(!i||rows[i-1].time_s<=r.time_s))};
+    timeIndexes.set(rows,index);
+  }
+  return index;
+}
+function throughTime(rows,time){
+  if(!timeIndex(rows).ordered)return rows.filter(r=>r.time_s<=time);
+  let lo=0,hi=rows.length;
+  while(lo<hi){const mid=(lo+hi)>>1;if(rows[mid].time_s<=time)lo=mid+1;else hi=mid;}
+  return rows.slice(0,lo);
+}
+function privateRows(name,id,time){
+  const rows=ensurePrivatePlayback().groups[name].get(id)||[];
+  return time===undefined?rows:throughTime(rows,time);
+}
+function reconcileChildren(parent,children){
+  children.forEach((node,i)=>{const old=parent.childNodes[i];if(!old)parent.append(node);else if(!old.isEqualNode(node))parent.replaceChild(node,old);});
+  while(parent.childNodes.length>children.length)parent.lastChild.remove();
+}
 function personalAt(agent,time,p){
   const ttl=state.data.agent_policy?.observation_policy?.current_observation_ttl_s??3;
-  const known=new Map(Object.entries(agent.initial_knowledge||{}).map(([id,k])=>[id,{...k,knowledge_source:'residential_prior'}]));
-  const observations=(agent.observations||[]).filter(o=>o.time_s<=time);
-  for(const o of observations){
+  const playback=ensurePrivatePlayback(),rows=agent.observations||[];
+  const observations=throughTime(rows,time),ordered=timeIndex(rows).ordered;
+  let cached=playback.people.get(agent);
+  if(!cached||cached.rows!==rows||cached.length!==rows.length||time<cached.time||!ordered){
+    cached={rows,length:rows.length,time:-Infinity,count:0,known:new Map(Object.entries(agent.initial_knowledge||{}).map(([id,k])=>[id,{...k,knowledge_source:k.source||'residential_prior'}])),local:undefined};
+    playback.people.set(agent,cached);
+  }
+  const known=cached.known;
+  for(let i=cached.count;i<observations.length;i++){const o=observations[i];
     if(o.kind==='landmark_seen')known.set(o.landmark_id,{...(known.get(o.landmark_id)||{}),id:o.landmark_id,floor:o.floor,observed_at_s:o.time_s,current_state:o.perceived_state,observation_id:o.id,knowledge_source:known.get(o.landmark_id)?.knowledge_source||'vision'});
     if(o.kind==='connection_learned')known.set(o.landmark_id,{...(known.get(o.landmark_id)||{}),id:o.landmark_id,to_floor:o.to_floor,connection_source:'own_traversal',connection_time_s:o.time_s});
+    if(o.kind==='local_hazard')cached.local=o;
   }
-  const local=observations.filter(o=>o.kind==='local_hazard').at(-1);
+  cached.count=observations.length;cached.time=time;
+  const local=cached.local;
   for(const k of known.values())k.current=p.status!=='on_stairs'&&p.status!=='evacuated'&&k.floor===p.floor&&k.observed_at_s===local?.time_s&&time-k.observed_at_s<=ttl;
-  const view=(agent.people_observations||[]).filter(o=>o.time_s<=time).at(-1);
-  return {known,observations,local,view,peopleCurrent:view&&p.status!=='on_stairs'&&p.status!=='evacuated'&&view.floor===p.floor&&time-view.time_s<=ttl};
+  const view=throughTime(agent.people_observations||[],time).at(-1);
+  return {known:new Map([...known].map(([id,k])=>[id,{...k}])),observations,local,view,peopleCurrent:view&&p.status!=='on_stairs'&&p.status!=='evacuated'&&view.floor===p.floor&&time-view.time_s<=ttl};
 }
 function privateTarget(id,agent){
   if(!id||id==='explore:none')return '다음 경로 미확보';
   if(id.startsWith('explore:'))return '관측한 공간의 탐색 경계';
   return `${agent.personal_knowledge?.local_ids?.[id]||'발견한 계단'}`;
 }
+function agentTraitOverview(agent){
+  const section=el('section',{class:'agent-traits','aria-label':'성향'}),profile=agent.experimental_profile;
+  const grid=el('dl',{class:'trait-grid'});
+  for(const [name,label] of Object.entries(traitNames)){
+    const item=el('div'),level=profile?.traits?.[name]?.level;
+    item.append(el('dt',{},label),el('dd',{'data-level':traitLevels[level]?level:'unknown'},traitLevels[level]||'미설정'));grid.append(item);
+  }
+  section.append(grid);
+  return section;
+}
+function agentClassificationEvidence(agent,opened){
+  const evidence=el('details',{'data-section':'classification',class:'classification-evidence'});
+  const body=el('div',{class:'classification-evidence-body'});
+  evidence.open=opened.has('classification');evidence.append(el('summary',{},'분류 근거'));
+  for(const [name,label] of Object.entries(traitNames)){
+    body.append(el('strong',{},label),el('p',{},agent.experimental_profile?.traits?.[name]?.assumption||'근거 요약이 없습니다.'));
+  }
+  for(const [key,label] of [['response_tendency','대피 반응 시간'],['speed_tendency','보행 속도']]){
+    body.append(el('strong',{},label),el('p',{},agent.mapping?.reasoning_summary?.[key]||'근거 요약이 없습니다.'));
+  }
+  const familiarity=agent.mapping?.familiarity||agent.familiarity;
+  body.append(el('strong',{},'역사 친숙도'),el('p',{},familiarity?.assumption||'근거 요약이 없습니다.'));
+  evidence.append(body);return evidence;
+}
+function appendSummaryRow(body,label,value,className=''){
+  const row=el('tr',{class:className}),headerId=`agent-summary-label-${body.children.length}`;
+  row.append(el('th',{id:headerId,colspan:2},label),el('td',{headers:headerId,colspan:2,title:value},value));
+  body.append(row);
+}
+function appendKnowledgeRows(body,agent,p,opened){
+  const info=personalAt(agent,state.time,p);
+  const connections=[...info.known.values()].filter(k=>k.to_floor).length;
+  appendSummaryRow(body,'아는 계단',`${info.known.size}개 · 층 연결 ${connections}개`,'agent-knowledge-row');
+  appendSummaryRow(body,'연기·열감',info.local?perceivedText(info.local.perceived):'미관측','agent-knowledge-row');
+  appendSummaryRow(body,'관측 시각',info.local?`${info.local.time_s.toFixed(1)}초`:'미관측','agent-knowledge-row');
+  appendSummaryRow(body,'주변 사람',info.peopleCurrent?`시야 안 ${info.view.people.length}명`:'미관측','agent-knowledge-row');
+  if(info.known.size){
+    const detail=el('details',{'data-section':'knowledge',class:'knowledge-landmarks'});
+    detail.open=opened.has('knowledge');detail.append(el('summary',{},'계단 기억 보기'));
+    const list=el('div');
+    for(const [id,k] of info.known){
+      const source=k.connection_source==='own_traversal'?'직접 이동해 연결 확인':k.knowledge_source==='familiarity_prior'?'사전 구조 기억':k.knowledge_source==='residential_prior'?'과거 거주 기반 기억':'직접 발견';
+      const when=k.observed_at_s==null?'현재 상태 미관측':`${k.observed_at_s.toFixed(1)}초 관측 · ${k.current?'현재 시야':'과거 관측'}`;
+      list.append(el('p',{},`${privateTarget(id,agent)} · ${k.floor||''} → ${k.to_floor||'연결층 미확인'} · ${source} · ${when}`));
+      if(k.current_state)list.append(el('p',{},`${k.current?'진입부 관측':'지난 진입부 관측'} · ${perceivedText(k.current_state.hazard)} · 주변 ${k.current_state.people}명`));
+    }
+    detail.append(list);
+    const row=el('tr',{class:'agent-knowledge-detail'}),cell=el('td',{colspan:4});
+    cell.append(detail);row.append(cell);body.append(row);
+  }
+}
 function drawPrivateInspector(){
   const a=state.data.agents.find(x=>x.agent_id===state.selected);if(!a)return;
   const key=`${state.selected}-${Math.floor(state.time*4)}`;if(state.inspectorKey===key)return;state.inspectorKey=key;
-  const visual=agentVisual(a),p=visual.p,box=$('personDetails');
-  const opened=new Set([...box.querySelectorAll('details[open][data-section]')].map(n=>n.dataset.section));
-  box.replaceChildren();
-  const badge=$('selectedMotionStatus');if(badge){badge.textContent=visual.label;badge.style.color=visual.color;badge.style.background=visual.color+'18';badge.style.borderColor=visual.color+'55';}
-  const facts=el('div',{class:'facts'});
-  fact(facts,'현재 상태',visual.label);fact(facts,'위치',p.status==='on_stairs'?'층간 계단':p.floor==='OUTSIDE'?'지상':p.floor);
-  fact(facts,'대피 시작 지연',`${a.pre_movement_s.toFixed(2)}초`);fact(facts,'기본 목표 보행 속도',`${a.desired_speed_mps.toFixed(2)}m/s`);
-  const waited=state.data.passages.filter(r=>r.agent_id===a.agent_id).reduce((s,r)=>s+Math.max(0,Math.min(state.time,r.entry)-r.arrival),0);
-  fact(facts,'지금까지 계단 입구 대기',`${waited.toFixed(1)}초`);
-  fact(facts,'계산 종료 시 결과',a.evacuation_time_s==null?`${state.data.summary.total_time_s.toFixed(0)}초까지 미완료`:`${a.evacuation_time_s.toFixed(1)}초 · ${state.data.scenario.exit_labels?.[a.exit_id]||a.exit_id}`);
-  box.append(facts);
-  const reason=el('div',{class:'reason'}),profile=a.experimental_profile;
-  reason.append(el('strong',{},'실험 성향 · 측정된 성격이 아닌 가정'));
-  if(profile)reason.append(el('small',{},`분류 방식 · ${(profile.classification_method||state.data.agent_policy?.classification_method)==='full_persona'?'페르소나 전체 해석':'키워드 후보 해석·시드 배정'} · ${profile.version}`));
-  if(profile)for(const [name,value] of Object.entries(profile.traits)){
-    const evidence={direct:'직접 관련 서술',contextual:'전체 문맥의 간접 추정',hypothesis:'정보 부족 가설'}[value.evidence_level];
-    reason.append(el('p',{},`${traitNames[name]} · ${traitLevels[value.level]} · ${evidence||(value.origin==='qwen_interpretation'?'Qwen 원문 해석':'고정 시드 배정')}`));
-    reason.append(el('small',{},value.assumption));
-    if(value.source_fields?.length)reason.append(el('small',{},`사용한 원문 필드 · ${value.source_fields.join(', ')}`));
-    for(const id of value.evidence_ids){const q=profile.excerpts.find(q=>q.id===id);if(q)reason.append(el('p',{},`원문 ${id} · ${q.field} · “${q.text}”`));}
-    if(value.information_insufficient)reason.append(el('small',{},'관련 정보 부족 · 원문 인용 없음'));
-    if(value.origin==='seeded_assignment')reason.append(el('small',{},'낮음 25% · 보통 50% · 높음 25% · 원문 인용 없음'));
+  const visual=agentVisual(a),p=visual.p,currentBox=$('personDetails'),box=document.createElement('div');
+  const opened=new Set([...currentBox.querySelectorAll('details[open][data-section]')].map(n=>n.dataset.section));
+  const badge=$('selectedMotionStatus');if(badge){badge.textContent=state.hasResults?visual.label:'계산 대기';badge.style.color=visual.color;badge.style.background=visual.color+'18';badge.style.borderColor=visual.color+'55';}
+  box.append(agentTraitOverview(a));
+  const movement=el('table',{class:'agent-movement-facts','aria-label':'대피 반응 시간과 보행 속도, 역사 친숙도'}),rows=el('tbody');
+  const familiarity=a.mapping?.familiarity||a.familiarity;
+  const familiarityLabel=a.classification_pending?'계산 대기':{first_visit:'초행',familiar:'구조에 익숙함',limited:'제한적 구조 지식'}[familiarity?.level]||'—';
+  const reaction=Number.isFinite(a.pre_movement_s)?`${a.pre_movement_s.toFixed(2)}초`:'계산 대기';
+  const speed=Number.isFinite(a.desired_speed_mps)?`${a.desired_speed_mps.toFixed(2)}m/s`:'계산 대기';
+  for(const [label,value] of [['대피 반응 시간',reaction],['보행 속도',speed],['역사 친숙도',familiarityLabel]]){
+    const row=el('tr');row.append(el('th',{scope:'row'},label),el('td',{},value));rows.append(row);
   }
-  reason.append(el('small',{},'추월 의도: 낮은 대기 인내·보통 이상 탐색과 상황 판단. 실행에는 실제 속도 차이·빈 공간·충돌 조건이 필요합니다.'));
-  const info=personalAt(a,state.time,p);
-  reason.append(el('strong',{},'초기 친숙도'));
-  reason.append(el('p',{},a.familiarity?.level==='limited'?'제한적인 과거 구조 지식':'초행 · 사전 구조 지식 없음'));
-  reason.append(el('small',{},a.familiarity?.assumption||''));
-  for(const e of a.familiarity?.evidence||[])reason.append(el('p',{},`거주 근거 · ${e.text}`));
-  if(Object.keys(a.initial_knowledge||{}).length)reason.append(el('small',{},'사전 지식은 과거의 층 연결이며 현재 혼잡·화재·통행 가능성을 알려주지 않습니다.'));
-  reason.append(el('strong',{},'개인이 아는 정보 · 재생 시점 기준'));
-  reason.append(el('p',{},`발견·기억한 계단 ${info.known.size}개 · 연결층을 아는 계단 ${[...info.known.values()].filter(k=>k.to_floor).length}개`));
-  for(const [id,k] of info.known){
-    const source=k.connection_source==='own_traversal'?'직접 이동해 연결 확인':k.knowledge_source==='residential_prior'?'과거 거주 기반 구조 지식':'직접 발견';
-    const when=k.observed_at_s==null?'현재 상태 미관측':`${k.observed_at_s.toFixed(1)}초 관측 · ${k.current?'현재 시야':'과거 관측'}`;
-    reason.append(el('p',{},`${privateTarget(id,a)} · ${k.floor||''} → ${k.to_floor||'연결층 미확인'} · ${source} · ${when}`));
-    if(k.current_state)reason.append(el('small',{},`${k.current?'진입부 관측':'지난 진입부 관측'} · ${perceivedText(k.current_state.hazard)} · 주변 ${k.current_state.people}명`));
+  movement.append(rows);box.append(movement);
+  box.append(agentClassificationEvidence(a,opened));
+  const latest=privateRows('decisions',a.agent_id,state.time).at(-1);
+  const nav=privateRows('navigation_updates',a.agent_id,state.time).at(-1);
+  const summary=el('div',{class:'agent-summary'});
+  const location=p.status==='on_stairs'?'층간 계단':p.floor==='OUTSIDE'?'지상':p.floor;
+  const target=p.status==='on_stairs'?p.segment?.stair_id:nav&&(!latest||nav.time_s>=latest.time_s)?nav.target:latest?.executed_target;
+  const targetText=state.hasResults&&p.status==='evacuated'?'대피 완료':!state.hasResults?'계산 대기':p.status==='pre_moving'?'대피 시작 대기':target?.startsWith('explore:')&&target!=='explore:none'?'관측한 공간 탐색 중':privateTarget(target,a);
+  const positionTable=el('table',{class:'agent-position-facts','aria-label':'현재 위치와 목표, 개인이 아는 정보, 최근 판단'}),positionRows=el('tbody'),positionRow=el('tr');
+  const columns=el('colgroup');
+  for(const width of ['36px','36px','36px',null])columns.append(el('col',width?{style:`width:${width}`} : {}));
+  positionTable.append(columns);
+  for(const [label,value] of [['위치',location],['목표',targetText]]){
+    const headerId=label==='위치'?'agent-location-label':'agent-target-label';
+    positionRow.append(el('th',{id:headerId},label),el('td',{headers:headerId,title:value},value));
   }
-  if(info.local)reason.append(el('p',{},`${info.local.time_s.toFixed(1)}초 ${info.local.source==='stair_sensation'?'계단에서 체감':'주변에서 지각'} · ${perceivedText(info.local.perceived)}`));
-  reason.append(el('small',{},info.peopleCurrent?`${info.view.time_s.toFixed(1)}초 본 사람 ${info.view.people.length}명 · 목적지·기억·계획은 제공받지 않음`:'현재 시야의 사람 수는 미관측'));
-  const latest=(state.data.decisions||[]).filter(d=>d.agent_id===a.agent_id&&d.time_s<=state.time).at(-1);
-  if(latest){
-    const raw=latest.raw_model_choice||{},priority=(raw.priority||latest.priority||'').split(':')[0];
-    reason.append(el('strong',{},`${latest.time_s.toFixed(1)}초 ${latest.source==='fallback'?'기본 행동':'Qwen 선택'}`));
-    reason.append(el('small',{},(latest.event_labels||[]).join(' · ')));
-    reason.append(el('p',{},`전략 · ${priorityNames[priority]||priority} / 이동 의도 · ${actionLabels[raw.movement||latest.requested_movement]||'계속 이동'}`));
-    reason.append(el('p',{},`개인 지도 계산의 실행 목표 · ${privateTarget(latest.executed_target,a)}`));
-    if(latest.execution_constraint)reason.append(el('small',{},latest.execution_constraint));
-    reason.append(el('small',{},`선택한 관측 ${(latest.used_observation_ids||[]).join(', ')||'없음'} · 선택한 기억 ${(latest.used_memory_ids||[]).join(', ')||'없음'}`));
-    for(const id of latest.used_evidence_ids||[]){const q=latest.observation?.profile?.excerpts.find(q=>q.id===id);if(q)reason.append(el('p',{},`선택 전략에 연결된 원문 ${id} · “${q.text}”`));}
-    reason.append(el('strong',{},'판단에 제공한 본인 관측'));
-    for(const o of latest.observation?.observations||[]){
-      const kind={local_hazard:'본인 주변의 연기·열감',landmark_seen:'본인이 본 계단 진입부',space_seen:'새 공간 발견',connection_learned:'직접 이동한 층 연결',implemented_sign_seen:'실제로 배치된 안내 표지'}[o.kind]||'본인 관측';
-      reason.append(el('p',{},`${o.id} · ${o.time_s.toFixed(1)}초 · ${kind}${latest.used_observation_ids?.includes(o.id)?' · 이번 판단에 사용':''}`));
+  positionRows.append(positionRow);
+  appendKnowledgeRows(positionRows,a,p,opened);
+  if(!(state.hasResults&&p.status==='evacuated')){
+    let decisionText=state.hasResults?'아직 판단 기록 없음':'계산 후 표시됩니다.';
+    if(latest){
+      const raw=latest.raw_model_choice||{},priority=(raw.priority||latest.priority||'').split(':')[0];
+      decisionText=`${latest.time_s.toFixed(1)}초 · ${priorityNames[priority]||'주변 상황 확인'} · ${actionLabels[raw.movement||latest.requested_movement]||'계속 이동'}`;
     }
-    const memories=latest.observation?.memory||[];
-    if(memories.length){reason.append(el('strong',{},'본인이 겪은 최근 경험 · 판단 당시'));
-      for(const m of memories){const outcome={reached_next_floor:'다음 층 도착',evacuated:'대피 완료',still_blocked:'정체 지속',advanced:'이동 진행',little_progress:'이동량 적음'}[m.result]||m.result;
-        reason.append(el('p',{},`${m.id} · ${m.time_s.toFixed(1)}초 이후 ${m.elapsed_s.toFixed(1)}초 · 평면 ${m.walked_m.toFixed(1)}m · 대기 ${m.waited_s.toFixed(1)}초 · ${outcome}${latest.used_memory_ids?.includes(m.id)?' · 이번 판단에 사용':''}`));}
-    }
-    reason.append(el('small',{},latest.source==='ollama_live'?'실제 로컬 Ollama 추론':latest.source==='ollama_cache'?'저장된 Qwen 응답 사용':'응답 실패 후 개인 지식으로 기본 행동'));
+    appendSummaryRow(positionRows,'최근 판단',decisionText,'agent-decision-row');
   }
-  const nav=(state.data.navigation_updates||[]).filter(n=>n.agent_id===a.agent_id&&n.time_s<=state.time).at(-1);
-  if(nav&&p.status!=='evacuated')reason.append(el('p',{},`현재 목표 · ${privateTarget(nav.target,a)} · ${navSources[nav.source]||'개인 지식에 따른 이동'}`));
-  if(state.time>=state.data.summary.total_time_s&&a.noncompletion_cause)reason.append(el('p',{},`미완료 원인 · ${causeNames[a.noncompletion_cause]||a.noncompletion_cause}`));
-  box.append(reason);
-  const hazard=(state.hazardByAgent?.get(a.agent_id)||[]).filter(h=>h.time_s<=state.time&&h.floor===p.floor&&(p.status!=='on_stairs'||h.stair_id===p.segment?.stair_id)).at(-1);
-  if(hazard&&p.status!=='evacuated'){
-    const detail=el('details',{'data-section':'fds',class:'persona-background'});detail.open=opened.has('fds');detail.append(el('summary',{},'연구자용 FDS 수치'));
-    detail.append(el('small',{},'정확한 수치는 물리 계산·표시용입니다. 에이전트에게는 연기·열감 단계만 전달합니다.'));
-    const values=el('div',{class:'facts'});fact(values,'FDS 연기',`K ${hazard.extinction_per_m.toFixed(3)} /m`);fact(values,'가시거리 · 상한 100m',`${hazard.visibility_m_capped_100.toFixed(1)}m`);
-    fact(values,hazard.temperature_sampling==='connected_floor_interpolation'?'온도 · 연결층 관측값 보간':'FDS 관측 온도',`${hazard.temperature_c.toFixed(1)}°C`);
-    fact(values,hazard.speed_factor_applied===false?'연기 계수 · 참고':'연기 목표속도 계수',`${hazard.speed_factor.toFixed(3)}배`);detail.append(values);box.append(detail);
+  positionTable.append(positionRows);summary.append(positionTable);
+  if(state.hasResults&&p.status==='evacuated'){
+    const completed=el('section',{class:'agent-completion'});
+    completed.append(el('strong',{},'대피 완료'),el('p',{},`${a.evacuation_time_s.toFixed(1)}초 · ${state.data.scenario.exit_labels?.[a.exit_id]||a.exit_id||'지상'}`));
+    summary.append(completed);
   }
-  if(a.mapping){
-    const detail=el('details',{'data-section':'baseline',class:'persona-background'});detail.open=opened.has('baseline');detail.append(el('summary',{},'시작 지연·기본 속도 근거'));
-    for(const [key,title] of [['response_tendency','반응'],['speed_tendency','이동']]){detail.append(el('p',{},`${title} · ${a.mapping.reasoning_summary?.[key]||''}`));for(const q of a.mapping.evidence?.[key]?.quotes||[])detail.append(el('p',{},`원문 · “${q.text}”`));}
-    if(a.mapping.overtaking)detail.append(el('p',{},`보존된 원문상 급함 기록 · ${a.mapping.overtaking.reason}`));box.append(detail);
-  }
-  const background=el('details',{'data-section':'background',class:'persona-background'});background.open=opened.has('background');background.append(el('summary',{},'페르소나 배경 · 원본 정보'));
+  box.append(summary);
+  const background=el('details',{'data-section':'background',class:'persona-background'});background.open=opened.has('background');background.append(el('summary',{},'페르소나 정보'));
+  if(a.persona.persona)background.append(el('p',{},a.persona.persona));
   const fields={sex:'성별',province:'시·도',district:'시·군·구',education_level:'학력',bachelors_field:'전공',marital_status:'혼인 상태',family_type:'가족 유형',housing_type:'주거 유형',military_status:'병역',professional_persona:'직업·경력',career_goals_and_ambitions:'진로 목표',family_persona:'가족·생활',hobbies_and_interests:'취미·관심사',skills_and_expertise:'기술·전문성',cultural_background:'문화적 배경',arts_persona:'예술',culinary_persona:'요리',sports_persona:'스포츠',travel_persona:'여행',uuid:'원본 식별자'};
   for(const [key,title] of Object.entries(fields)){const value=a.persona[key];if(value!=null&&value!==''){const field=el('div');field.append(el('small',{},title),el('p',{},Array.isArray(value)?value.join(', '):String(value)));background.append(field);}}
   box.append(background);
-  $('decisionLog').replaceChildren(...(state.data.decisions||[]).filter(d=>d.agent_id===a.agent_id&&d.time_s<=state.time).map(d=>{const row=el('div',{class:'decision-row'});row.append(el('b',{},`${d.time_s.toFixed(1)}초 · ${priorityNames[d.priority]||d.priority}`),el('span',{},`${actionLabels[d.requested_movement]} → ${privateTarget(d.executed_target,a)}`));return row;}));
+  const history=el('details',{'data-section':'history',class:'assumptions'}),log=el('div',{id:'decisionLog'});
+  history.open=opened.has('history');history.append(el('summary',{},'판단 기록'),log);
+  box.append(history);
+  reconcileChildren(currentBox,[...box.childNodes]);
+  reconcileChildren($('decisionLog'),privateRows('decisions',a.agent_id,state.time).map(d=>{const row=el('div',{class:'decision-row'});row.append(el('b',{},`${d.time_s.toFixed(1)}초 · ${priorityNames[d.priority]||d.priority}`),el('span',{},`${actionLabels[d.requested_movement]} → ${privateTarget(d.executed_target,a)}`));return row;}));
 }

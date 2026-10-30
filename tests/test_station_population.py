@@ -8,7 +8,8 @@ import pytest
 from persona_evac.hashing import sha256_value
 from persona_evac.integration.station import StationRequest, initialize_station
 from persona_evac.llm import MockProvider
-from persona_evac.persona.station_population import MAPPING_FIELDS, prepare_population
+from persona_evac.persona.station_population import prepare_population, refresh_population
+from persona_evac.llm.baseline_profile import POLICY
 from persona_evac.persona.sampling import fetch_nemotron_snapshot, load_personas
 from station_fixtures import source, config
 
@@ -68,7 +69,7 @@ def test_prepare_maps_each_person_preserves_raw_profile_and_provenance(tmp_path)
         seen = []
         def map(self, profile, context):
             self.seen.append(profile.uuid)
-            assert "culinary_persona" not in profile.model_dump()
+            assert profile.model_dump()['culinary_persona'] == 'original'
             return super().map(profile, context)
     provider = RecordingProvider()
     path = prepare_population(snapshot, Path("data/fixtures/julich_features.csv"), tmp_path/"source.json", provider)
@@ -77,6 +78,33 @@ def test_prepare_maps_each_person_preserves_raw_profile_and_provenance(tmp_path)
     for agent in agents:
         assert agent["persona"]["culinary_persona"] == "original"
         assert agent["provenance"]["persona"]["record_id"] == agent["persona"]["uuid"]
-        assert agent["provenance"]["mapping"]["input_fields"] == list(MAPPING_FIELDS)
+        assert set(agent["provenance"]["mapping"]["input_fields"]) == set(agent['persona']) - {'uuid'}
+        assert agent['provenance']['mapping']['policy'] == POLICY
         assert agent["pre_movement_s"] == agent["empirical"]["response_time_s"]
         assert agent["desired_speed_mps"] == agent["empirical"]["desired_speed_mps"]
+
+
+def test_refresh_reclassifies_only_requested_old_baselines_without_changing_originals():
+    from copy import deepcopy
+    class Provider(MockProvider):
+        def __init__(self): self.seen=[]
+        def map(self,profile,context):
+            self.seen.append(profile.uuid)
+            assert profile.model_dump()['culinary_persona']=='원문 전체 유지'
+            return super().map(profile,context)
+    original=source(12)
+    original.update(backend='nemotron_qwen_empirical',provenance={'snapshot':{'selection_seed':123}})
+    for agent in original['variants']['C']:
+        agent['persona'].update(age=30,culinary_persona='원문 전체 유지')
+        agent['provenance']={'empirical':{'source_ref':'data/fixtures/julich_features.csv'}}
+    before=deepcopy(original);provider=Provider()
+    updated=refresh_population(original,10,provider)
+    assert original==before
+    assert provider.seen==[str(i) for i in range(10)]
+    for agent in updated['variants']['C'][:10]:
+        assert agent['provenance']['mapping']['policy']==POLICY
+        assert agent['pre_movement_s']==agent['empirical']['response_time_s']
+        assert agent['desired_speed_mps']==agent['empirical']['desired_speed_mps']
+    assert updated['variants']['C'][10:]==original['variants']['C'][10:]
+    assert refresh_population(updated,10,provider) is updated
+    assert len(provider.seen)==10

@@ -11,18 +11,19 @@ from persona_evac.llm.ollama import atomic_json
 
 def summary(profiles):
     values = list(profiles.values())
+    traits=list(values[0]['traits']) if values else []
     def counts(items, categories):
         counted = Counter(items)
         total = sum(counted.values())
         return {'counts': {k: counted[k] for k in categories},
                 'ratios': {k: counted[k]/total if total else 0 for k in categories}}
     evidence = lambda d: d.get('evidence_level', 'legacy_literal_interpretation'
-                               if d['origin'] == 'qwen_interpretation' else 'seeded_assignment')
-    categories = ['direct', 'contextual', 'hypothesis', 'legacy_literal_interpretation', 'seeded_assignment']
+                               if d['origin'] == 'qwen_interpretation' else d['origin'])
+    categories = ['direct', 'contextual', 'hypothesis', 'legacy_literal_interpretation', 'seeded_assignment', 'llm_full_persona']
     return {'count': len(values),
-            'levels': {t: counts((p['traits'][t]['level'] for p in values), LEVELS) for t in TRAITS},
+            'levels': {t: counts((p['traits'][t]['level'] for p in values), LEVELS) for t in traits},
             'evidence_levels': counts((evidence(d) for p in values for d in p['traits'].values()), categories),
-            'evidence_by_trait': {t: counts((evidence(p['traits'][t]) for p in values), categories) for t in TRAITS}}
+            'evidence_by_trait': {t: counts((evidence(p['traits'][t]) for p in values), categories) for t in traits}}
 
 
 def main():
@@ -51,9 +52,10 @@ def main():
               'requested_count': args.count, 'source_sha256': hashlib.sha256(source_path.read_bytes()).hexdigest()}
     try:
         profiles = provider.prepare(agents)
+        traits=list(next(iter(profiles.values()))['traits'])
         report.update(count=len(profiles), wall_s=provider.wall_s, records=provider.records,
             origins=dict(Counter(t['origin'] for p in profiles.values() for t in p['traits'].values())),
-            levels={t:dict(Counter(p['traits'][t]['level'] for p in profiles.values())) for t in TRAITS},
+            levels={t:dict(Counter(p['traits'][t]['level'] for p in profiles.values())) for t in traits},
             summary=summary(profiles))
         atomic_json(destination/'profiles.json', {'classification_method': provider.method, 'version': provider.version,
             'source_sha256': report['source_sha256'],
@@ -67,7 +69,7 @@ def main():
                 'legacy_cache_hits': len(legacy.records),
                 'changed_levels': {t: sum(profiles[a['agent_id']]['traits'][t]['level'] !=
                     baseline[a['agent_id']]['traits'][t]['level'] for a in agents) for t in TRAITS},
-                'evidence_note': '기존 원문 해석과 새 직접 근거는 판정 기준이 달라 동일 범주로 합치지 않습니다.'}
+                'evidence_note': '전체 원문 분류는 등급과 근거 요약만 생성하며 근거 수준·원문 인용을 별도로 분류하지 않습니다.'}
         if args.repeat_count:
             if provider.method != 'full_persona':
                 raise ValueError('반복 추론 검증은 full_persona에서 사용합니다.')
@@ -82,9 +84,9 @@ def main():
             report['repeatability'] = {'sample_count': len(sample), 'total_runs': len(runs),
                 'settings': profiles[sample[0]['agent_id']]['inference_settings'], 'records': repeat_records,
                 'levels': {str(a['agent_id']): {t: [r[a['agent_id']]['traits'][t]['level'] for r in runs]
-                    for t in TRAITS} for a in sample},
+                    for t in traits} for a in sample},
                 'changed_people_by_trait': {t: sum(len({r[a['agent_id']]['traits'][t]['level'] for r in runs}) > 1
-                    for a in sample) for t in TRAITS}}
+                    for a in sample) for t in traits}}
         report['status'] = 'completed'
     except Exception as exc:
         report.update(status='technical_failure', error_type=type(exc).__name__, error=str(exc),

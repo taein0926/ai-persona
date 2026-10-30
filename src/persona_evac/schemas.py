@@ -58,9 +58,16 @@ class BehaviorEvidence(StrictModel):
 
 
 class OvertakingDisposition(StrictModel):
-    disposition: Literal['urgent','relaxed','unknown']
-    reason: str = Field(min_length=8,max_length=60,description='한국어 문장으로 성격 근거를 짧게 설명한다.')
+    # unknown is accepted only for historical artifacts; new inference uses normal.
+    disposition: Literal['urgent','normal','relaxed','unknown']
+    reason: str = Field(min_length=1,max_length=240,description='한국어 문장으로 성격 근거를 짧게 설명한다.')
     quotes: list[EvidenceQuote] = Field(max_length=2)
+
+
+class StationFamiliarity(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    level: Literal['first_visit', 'familiar']
+    assumption: str = Field(min_length=1, max_length=240)
 
 
 class BehaviorMapping(StrictModel):
@@ -69,6 +76,7 @@ class BehaviorMapping(StrictModel):
     reasoning_summary: BehaviorReasoning
     evidence: BehaviorEvidence | None = None
     overtaking: OvertakingDisposition | None = None
+    familiarity: StationFamiliarity | None = None
 
 
 class EvidenceReasoning(StrictModel):
@@ -166,6 +174,7 @@ class AgentResult(StrictModel):
     agent_id: int
     persona: PersonaProfile
     mapping: BehaviorMapping | None = None
+    # 과거 저장 결과의 출처 값도 읽는다. 실제 모델 호출은 로컬 Ollama만 지원한다.
     mapping_source: Literal["none", "mock", "openai", "groq", "ollama", "fallback"] = "none"
     scenario_context: ScenarioContext
     empirical: ResolvedBehavior | None = None

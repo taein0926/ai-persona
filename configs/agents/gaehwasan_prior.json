@@ -1,6 +1,13 @@
 {
   "version": "limited_residential_structure_v1",
   "basis": "서울 강서구 거주를 제한된 과거 구조 지식의 대리지표로 사용하는 실험 가정. 거리와 실제 이용 경험은 추정하지 않음.",
+  "llm_familiarity": {
+    "version": "llm_station_structure_v1",
+    "landmark_scope": "all_station_stairs",
+    "known_facts": ["position", "floor_connection"],
+    "current_conditions_known": false,
+    "walkable_map_known": false
+  },
   "landmarks": [
     {"id":"A_W","area":"A","floor":"B2","position":[85.9788,29.1005],"to_floor":"B1","to_area":"hall","kind":"up_stair"},
     {"id":"B_W","area":"B","floor":"B2","position":[85.9788,5.8201],"to_floor":"B1","to_area":"hall","kind":"up_stair"},

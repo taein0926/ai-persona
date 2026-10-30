@@ -1,0 +1,28 @@
+{
+  "reviewed_on": "2026-10-29",
+  "source_pdf": "data/reference/station_candidates/gaehwasan_mechanical_2026.pdf",
+  "page_1_based": 3,
+  "source_plan": "1층(전기실) 평면도",
+  "cross_check_image": "data/reference/station_candidates/gaehwasan_emergency.jpg",
+  "scope": "지도 형태 보정. 시뮬레이션·FDS 재계산은 수행하지 않음.",
+  "findings": [
+    {
+      "exit_id": "E_1",
+      "before": "방풍실과 상부 연결 공간이 없는 북향 직선 연결",
+      "after": "북측 방풍실·상부 연결 공간·서쪽으로 꺾인 외부 계단의 평면 투영",
+      "centerline_pdf": [[533, 203], [533, 196], [526, 196], [518, 198], [510, 194]]
+    },
+    {
+      "exit_id": "E_2",
+      "before": "원형 외곽에서 곧바로 외부로 연결한 짧은 계단 표현",
+      "after": "남측 방풍실의 양쪽 문·측벽·외부 접속부를 통과하는 연결",
+      "centerline_pdf": [[537, 319], [538, 327], [539, 340]]
+    }
+  ],
+  "limits": [
+    "평면도의 수작업 근사이며 현재 준공 상태와의 일치는 확인하지 않음.",
+    "1층 도면의 DOWN B1FL(4M) 표기는 단면 확인 전 외부 출구의 실제 지면 높이로 적용하지 않음.",
+    "외부 계단의 단수·경사·지면 높이차는 미확인. 표시된 출구 경로는 같은 높이의 평면 투영이며 높이차를 확정하지 않음.",
+    "방풍실 문틀 높이 2.1m와 측벽 두께는 표시용 가정. 문 개폐·개별 통과 물리는 후속 JuPedSim 통합 작업임."
+  ]
+}

@@ -1,9 +1,9 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const ns = 'http://www.w3.org/2000/svg';
-const state = {data: null, time: 0, playing: false, selected: null, frame: null, last: null, dirty: false};
-const labels = {pre_moving: '대피 전 대기', walking: '평면 이동', waiting: '판단 후 대기', queueing: '계단 진입 대기', on_stairs: '계단 이동', evacuated: '지상 도착'};
-const colors = {pre_moving: '#e6d68d', walking: '#74e0bb', waiting: '#ef94cb', queueing: '#f0b55d', on_stairs: '#91baff', evacuated: '#6c9691'};
+const state = {data: null, hasResults: false, time: 0, playing: false, selected: null, frame: null, last: null, dirty: false};
+const labels = {pre_moving: '대피 전 대기', walking: '평면 이동', waiting: '판단 후 대기', queueing: '통로 진입 대기', on_stairs: '계단 이동', on_gate:'개찰구 통과', evacuated: '지상 도착'};
+const colors = {pre_moving: '#e6d68d', walking: '#74e0bb', waiting: '#ef94cb', queueing: '#f0b55d', on_stairs: '#91baff', on_gate: '#74e0bb', evacuated: '#6c9691'};
 const actionLabels = {continue: '계속 이동', hurry: '서두르기', wait: '2초 기다리기', reroute: '다른 계단으로 우회', overtaking:'추월 시도',overtake:'추월 시도'};
 function el(tag, attrs = {}, text = '') {
   const node = document.createElement(tag);
@@ -20,7 +20,21 @@ function svg(tag, attrs = {}, text = '', parent = $('map')) {
 }
 // Screen height follows physical floor order. B1 is mirrored so street stairs face upward.
 function xy(p){return stationXY(p);}
-function position(agent, time) {
+let playbackFrame=null;
+function frameEntry(agent,time) {
+  if(time!==state.time)return null;
+  if(!playbackFrame||playbackFrame.data!==state.data||playbackFrame.time!==time)
+    playbackFrame={data:state.data,time,agents:new WeakMap()};
+  let value=playbackFrame.agents.get(agent);
+  if(!value){value={};playbackFrame.agents.set(agent,value);}
+  return value;
+}
+function position(agent,time) {
+  const entry=frameEntry(agent,time);
+  if(!entry)return calculatePosition(agent,time);
+  return entry.position||(entry.position=calculatePosition(agent,time));
+}
+function calculatePosition(agent, time) {
   const final = agent.segments.at(-1);
   if (agent.evacuation_time_s!=null&&time >= agent.evacuation_time_s) return {status: 'evacuated', floor: 'OUTSIDE', pos: xy(final.to), segment: null};
   let lo = 0, hi = agent.segments.length - 1, s;
@@ -37,6 +51,11 @@ function position(agent, time) {
     pos: {x: a.x + (b.x - a.x) * p, y: a.y + (b.y - a.y) * p}, segment: s, progress: p};
 }
 function agentVisual(agent,time=state.time) {
+  const entry=frameEntry(agent,time);
+  if(!entry)return calculateAgentVisual(agent,time);
+  return entry.visual||(entry.visual=calculateAgentVisual(agent,time));
+}
+function calculateAgentVisual(agent,time) {
   const p=position(agent,time),s=p.segment;
   let speed=0;
   if(s&&p.status==='walking')speed=Math.hypot(s.to.x-s.from.x,s.to.y-s.from.y)/Math.max(.001,s.end-s.start);
@@ -55,8 +74,8 @@ function select(id) {
   state.selected = id;
   const agent = state.data.agents.find(a => a.agent_id === id);
   if (state.data.scenario.drawing) stationSelectAgent(agent);
-  $('personTitle').textContent = `#${id} · ${agent.persona.occupation}`;
-  $('personDescription').textContent = `${agent.persona.age}세 · ${agent.persona.persona}`;
+  $('personTitle').textContent = agent.persona.occupation;
+  $('personDescription').textContent = `${agent.persona.age}세`;
   document.querySelectorAll('.persona-list button').forEach(b => b.classList.toggle('selected', +b.dataset.id === id));
   document.querySelectorAll('.persona-list button').forEach(b=>b.setAttribute('aria-pressed',String(+b.dataset.id===id)));
   if($('selectedAgentBadge'))$('selectedAgentBadge').textContent=`#${id}`;
@@ -110,7 +129,7 @@ function draw() {
   for (const agent of state.data.agents) {
     const p = position(agent, state.time), g = $(`agent-${agent.agent_id}`);
     counts[p.status] = (counts[p.status] || 0) + 1;
-    if (p.segment?.stair_id && ['queueing', 'on_stairs'].includes(p.status)) stairCounts[p.segment.stair_id][p.status]++;
+    if (stairCounts[p.segment?.stair_id] && ['queueing', 'on_stairs'].includes(p.status)) stairCounts[p.segment.stair_id][p.status]++;
     // Spread only completed agents; live queues retain their actual JuPedSim coordinates.
     let dx = 0, dy = 0;
     if (p.status === 'evacuated') {
@@ -127,9 +146,10 @@ function draw() {
   }
   for (const [id, count] of Object.entries(stairCounts)) if($(`live-${id}`)) $(`live-${id}`).textContent = `대기 ${count.queueing} · 이동 ${count.on_stairs}`;
   $('clock').textContent = `${state.time.toFixed(1)}초`; $('time').value = state.time;
-  $('liveStats').replaceChildren(...Object.entries(labels).map(([key, label]) => {
+  const statsKey=JSON.stringify(counts);
+  if(state.liveStatsKey!==statsKey){state.liveStatsKey=statsKey;$('liveStats').replaceChildren(...Object.entries(labels).map(([key, label]) => {
     const span = el('span', {}, `${label} `); span.append(el('b', {}, `${counts[key] || 0}명`)); return span;
-  }));
+  }));}
   drawInspector();
   if (state.data.scenario.drawing) drawStationView();
 }
@@ -143,8 +163,25 @@ function animate(now) {
   draw();
   if (state.playing) state.frame = requestAnimationFrame(animate);
 }
+function sortAgentList(){
+  if(!state.data)return;
+  const mode=$('agentSort')?.value||'number',agents=[...state.data.agents];
+  agents.sort((a,b)=>{
+    if(mode==='speed_desc'||mode==='speed_asc'){
+      const aKnown=Number.isFinite(a.desired_speed_mps),bKnown=Number.isFinite(b.desired_speed_mps);
+      if(aKnown!==bKnown)return aKnown?-1:1;
+      if(aKnown&&a.desired_speed_mps!==b.desired_speed_mps)
+        return (mode==='speed_desc'?-1:1)*(a.desired_speed_mps-b.desired_speed_mps);
+    }
+    return a.agent_id-b.agent_id;
+  });
+  const list=$('personaList'),buttons=new Map([...list.children].map(b=>[b.dataset.id,b]));
+  list.append(...agents.map(a=>buttons.get(String(a.agent_id))));
+  list.scrollTop=0;
+}
 function showResults(data) {
-  stop(); state.data = data; state.time = 0;state.inspectorKey=null;
+  playbackFrame=null;state.liveStatsKey=null;resetPrivatePlayback(data);
+  stop(); state.data = data; state.hasResults=!!data.summary; state.time = 0;state.inspectorKey=null;
   state.inspectorKey=null;state.overtakesByAgent=new Map();
   for(const e of data.movement_diagnostics?.overtakes||[]){if(!state.overtakesByAgent.has(e.passing_agent))state.overtakesByAgent.set(e.passing_agent,[]);state.overtakesByAgent.get(e.passing_agent).push(e);}
   state.hazardByAgent = new Map();
@@ -153,46 +190,72 @@ function showResults(data) {
     state.hazardByAgent.get(h.agent_id).push(h);
   }
   const summary = data.summary;
+  $('metrics').hidden=!state.hasResults;
+  $('liveStats').hidden=!state.hasResults;
   $('metrics').replaceChildren();
-  for (const [label, value, unit] of [['대피 인원', summary.count, '명'], ['지상 도착 · 종료 시점', summary.completed_count??data.agents.filter(a=>a.evacuation_time_s!=null).length, `명 · 미완료 ${summary.count-(summary.completed_count??data.agents.filter(a=>a.evacuation_time_s!=null).length)}명`], ['1인 평균 계단 대기', summary.mean_wait_s.toFixed(1), '초'], ['지상 출구 분산', Object.values(summary.exit_split).join(' / '), '1번 / 2번']]) {
-    const card = el('div'); card.append(el('small', {}, label), el('strong', {}, value), el('em', {}, unit)); $('metrics').append(card);
+  if(summary){
+    const completed=summary.completed_count??data.agents.filter(a=>a.evacuation_time_s!=null).length;
+    const counts=[['대피 완료',completed],['미완료',(summary.count??data.agents.length)-completed]];
+    const exits=new Set([...Object.keys(data.scenario.exit_labels||{}),...Object.keys(summary.exit_split||{})]);
+    for(const id of exits)counts.push([data.scenario.exit_labels?.[id]||id,summary.exit_split?.[id]??0]);
+    const grid=el('div',{class:'result-grid'});
+    for(const [label,value] of counts){
+      const card=el('div',{class:'result-card'});
+      card.append(el('small',{},label),el('strong',{},value),el('em',{},'명'));grid.append(card);
+    }
+    $('metrics').append(el('h3',{},'최종 결과'),grid);
   }
   // Round the control endpoint up; browsers may truncate arbitrary float maxima.
-  const duration=data.replay_duration_s||summary.total_time_s;
-  $('time').max = Math.ceil(duration * 10) / 10; $('endTime').textContent = `${duration.toFixed(1)}초`;
+  const duration=data.replay_duration_s||summary?.total_time_s||0;
+  $('time').max = Math.ceil(duration * 10) / 10; $('endTime').textContent = state.hasResults?`${duration.toFixed(1)}초`:'—';
   $('personaList').replaceChildren(...data.agents.map(a => {
-    const b=el('button',{'data-id':a.agent_id,'aria-label':`페르소나 ${a.agent_id} 선택`,'data-search':`${a.agent_id} ${a.persona.occupation}`.toLowerCase()});
+    const speed=Number.isFinite(a.desired_speed_mps)?`${a.desired_speed_mps.toFixed(2)}m/s`:'계산 대기';
+    const b=el('button',{'data-id':a.agent_id,'aria-label':`페르소나 ${a.agent_id} 선택`,title:`#${a.agent_id} · ${a.persona.occupation} · ${a.persona.age}세 · 보행 속도 ${speed}`});
     if(data.scenario.drawing)b.append(el('span',{class:'agent-status-dot'}),el('span',{class:'agent-list-id'},`#${a.agent_id}`),el('span',{class:'agent-list-job'},a.persona.occupation),el('span',{class:'agent-list-age'},`${a.persona.age}세`));else b.textContent=a.agent_id;
     b.addEventListener('click',()=>select(a.agent_id));return b;
   }));
   if($('agentListCount'))$('agentListCount').textContent=`${data.agents.length}명`;
-  if($('agentSearch'))$('agentSearch').oninput=e=>{const q=e.target.value.trim().toLowerCase();document.querySelectorAll('#personaList button').forEach(b=>b.hidden=!b.dataset.search.includes(q));};
-  $('behaviorMode').value=data.behavior?.mode||'off';
+  sortAgentList();
+  if(state.hasResults)$('behaviorMode').value=data.behavior?.mode||'off';
   $('agentCount').value=String(data.agents.length);
-  $('fireMode').value=data.fire?.enabled?'fds':'off';
-  $('decisionLog').replaceChildren();
-  for (const id of ['play', 'reset', 'time', 'run', 'behaviorRun', 'download']) if($(id)) $(id).disabled = false;
-  $('message').className = ''; $('message').textContent = data.scenario.drawing?'':data.backend_notice;
+  if(state.hasResults)$('fireMode').value=data.fire?.enabled?'fds':'off';
+  $('decisionLog')?.replaceChildren();
+  for (const id of ['play', 'reset', 'time', 'download']) if($(id)) $(id).disabled = !state.hasResults;
+  for(const id of ['run','behaviorRun'])if($(id))$(id).disabled=data.calculation_available===false||data.scenario.simulation_enabled===false;
+  $('behaviorRun').textContent='설정으로 계산';
+  $('message').className = ''; $('message').textContent = state.hasResults?'계산 완료':$('behaviorRun').disabled?'계산 사용 불가':'계산 준비';
+  $('message').title=data.backend_notice||'';
   state.dirty = false; buildMap(); select(data.agents.some(a => a.agent_id === state.selected) ? state.selected : data.agents[0].agent_id);
 }
 async function load(payload) {
   $('behaviorRun').disabled = true;
-  stop(); ($('run')||{}).disabled = true; $('message').className = ''; $('message').textContent = !payload ? '저장된 시뮬레이션 결과를 불러오고 있습니다…' : payload?.behavior_mode === 'qwen' ? 'JuPedSim 이동과 Qwen 상황 판단을 계산하고 있습니다. 여러 번의 AI 호출로 시간이 걸릴 수 있습니다…' : 'JuPedSim으로 사람 간 회피와 층간 이동을 계산하고 있습니다…';
+  stop(); ($('run')||{}).disabled = true; $('message').className = ''; $('message').title=''; $('message').textContent = payload?'계산 중':'불러오는 중';
   try {
-    const response = await fetch(`/api/${document.body.dataset.station || 'gaehwasan'}`, payload ? {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)} : {});
-    if (!response.ok) {const problem = await response.json(); throw new Error(`계산 실패 (${response.status}): ${typeof problem.detail === 'string' ? problem.detail : '입력값을 확인해 주세요.'}`);}
+    const station=document.body.dataset.station||'gaehwasan';
+    let response = await fetch(`/api/${station}`, payload ? {cache:'no-store',method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)} : {cache:'no-store'});
+    if(!payload&&station==='gaehwasan'&&[404,409].includes(response.status)){
+      const problem=await response.clone().json();
+      if(['station_result_missing','station_result_outdated'].includes(problem.detail?.code))
+        response=await fetch('/api/gaehwasan/setup',{cache:'no-store'});
+    }
+    if (!response.ok) {const problem = await response.json(); throw new Error(`계산 실패 (${response.status}): ${typeof problem.detail === 'string' ? problem.detail : problem.detail?.message||'입력값을 확인해 주세요.'}`);}
     showResults(await response.json());
   } catch (error) {$('message').className = 'error'; $('message').textContent = error.message; $('behaviorRun').disabled = false; if (state.data) ($('run')||{}).disabled = false;}
 }
 $('stairsForm').addEventListener('submit', event => {
   event.preventDefault();
   const stairs = [...document.querySelectorAll('[data-stair-id]')].map(card => ({id: card.dataset.stairId, ...Object.fromEntries([...card.querySelectorAll('input')].map(input => [input.name, Number(input.value)]))}));
-  load({stairs, behavior_mode: $('behaviorMode').value, agent_count: Number($('agentCount').value), fire_mode: $('fireMode').value});
+  load({stairs, behavior_mode: $('behaviorMode').value, profile_method: $('behaviorMode').value==='qwen'?'full_persona':'keyword_candidates', agent_count: Number($('agentCount').value), fire_mode: $('fireMode').value});
 });
-$('stairsForm').addEventListener('input', () => {state.dirty = true; $('message').textContent = '설정이 변경되었습니다. 다시 계산하면 재생 화면과 결과에 반영됩니다.';});
-$('play').addEventListener('click', () => {if (state.playing) return stop(); if (!state.data) return; if (state.time >= (state.data.replay_duration_s||state.data.summary.total_time_s)) state.time = 0; if(state.data.scenario.drawing) stationPlaybackStarted(); state.playing = true; state.last = null; $('play').textContent = '❚❚'; $('play').setAttribute('aria-label', '일시정지'); state.frame = requestAnimationFrame(animate);});
+$('stairsForm').addEventListener('input', () => {state.dirty = true; $('message').className=''; $('message').textContent = '설정 변경됨 · 다시 계산해 주세요';$('message').title='';});
+$('agentSort')?.addEventListener('change',sortAgentList);
+$('play').addEventListener('click', () => {if (state.playing) return stop(); if (!state.hasResults) return; if (state.time >= (state.data.replay_duration_s||state.data.summary.total_time_s)) state.time = 0; if(state.data.scenario.drawing) stationPlaybackStarted(); state.playing = true; state.last = null; $('play').textContent = '❚❚'; $('play').setAttribute('aria-label', '일시정지'); state.frame = requestAnimationFrame(animate);});
 $('reset').addEventListener('click', () => {stop(); state.time = 0; draw();});
-$('time').addEventListener('input', e => {stop(); state.time = Math.min(Number(e.target.value), state.data.replay_duration_s||state.data.summary.total_time_s); draw();});
+$('time').addEventListener('input', e => {if(!state.hasResults)return;stop(); state.time = Math.min(Number(e.target.value), state.data.replay_duration_s||state.data.summary.total_time_s); draw();});
 $('download')?.addEventListener('click', () => {if (!state.data) return; const url = URL.createObjectURL(new Blob([JSON.stringify(state.data, null, 2)], {type: 'application/json'})); const a = el('a', {href: url, download: `${document.body.dataset.station || 'gaehwasan'}-${state.data.scenario_hash.slice(0, 12)}.json`}); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);});
-$('fieldMode').addEventListener('change', () => {state.lastFireDraw = null; draw();});
+function updateOpacityControls(){
+  $('smokeOpacityControls').hidden=$('fieldMode').value!=='volume';
+}
+$('fieldMode').addEventListener('change', () => {updateOpacityControls();state.lastFireDraw = null;if(state.data)draw();});
+updateOpacityControls();
 load();

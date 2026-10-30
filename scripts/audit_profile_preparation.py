@@ -13,8 +13,7 @@ import xml.etree.ElementTree as ET
 
 from persona_evac.agent_policy import POLICY_HASH, VERSIONS
 from persona_evac.llm.ollama import atomic_json
-from persona_evac.llm.private_decisions import PrivateDecisions
-from persona_evac.persona.experimental_profile import ExperimentalProfiles, TRAITS, validate_profile
+from persona_evac.persona.experimental_profile import ExperimentalProfiles, FULL_TRAITS as TRAITS, validate_profile
 from persona_evac.persona.full_profile import CONFIG, POLICY_HASH_FULL, ProfileFormatError, persona_fields
 
 
@@ -39,16 +38,14 @@ def main():
     baseline = legacy.prepare(agents, cache_only=True)
     assert all(record['source'] == 'profile_cache' for record in legacy.records)
     active = json.loads((root/'results.json').read_text(encoding='utf-8'))
-    def forbid_inference(*args, **kwargs):
-        raise AssertionError('기존 판단 캐시가 일치하지 않습니다. 재추론하지 않고 검사를 중단했습니다.')
-    original_settings=deepcopy(active['behavior']['inference_settings'])
-    decision_local=SimpleNamespace(model=original_settings['model'], digest=original_settings['model_digest'],
-                                   settings=original_settings, generate=forbid_inference)
-    decision_cache=PrivateDecisions(root/'decision_cache/private_agents_final_v2', local=decision_local,
-                                   prompt_batch_size=active['decisions'][0]['prompt_batch_size'])
+    # 과거 응답은 당시 캐시 키와 원본 응답으로 확인한다. 새 입력·프롬프트로
+    # 과거 판단을 다시 실행하거나 이전 응답을 새 판단의 캐시로 사용하지 않는다.
+    recorded_cache_checks = 0
     for decision in active['decisions']:
-        _,meta=decision_cache.decide([decision['observation']])
-        assert meta['source']=='ollama_cache' and meta['cache_key']==decision['cache_key']
+        paths = list(root.rglob(f'{decision["cache_key"]}.json'))
+        expected = {str(decision['agent_id']): decision['raw_model_choice']}
+        assert any(json.loads(path.read_text(encoding='utf-8')) == expected for path in paths)
+        recorded_cache_checks += 1
     active_profiles = {a['persona']['uuid']:a['experimental_profile'] for a in active['agents']}
     for agent in agents:
         p = profiles[agent['agent_id']]
@@ -57,7 +54,8 @@ def main():
         assert p['version'] != VERSIONS['profile']
         assert p['input_fields'] == list(persona_fields(agent['persona'])) and not p['input_truncated']
         assert all(t['origin'] == 'llm_full_persona' and t['distribution'] is None for t in p['traits'].values())
-        assert baseline[agent['agent_id']] == active_profiles[agent['persona']['uuid']]
+        if active['agent_policy'].get('classification_method', 'keyword_candidates') == 'keyword_candidates':
+            assert baseline[agent['agent_id']] == active_profiles[agent['persona']['uuid']]
     model = next(iter(profiles.values()))['model']
     cache_provider = ExperimentalProfiles(root/'private_profile_cache', local=SimpleNamespace(
         model=model['name'], digest=model['digest'], settings={}), seed=legacy.seed, method='full_persona')
@@ -77,7 +75,7 @@ def main():
     sparse = json.loads(Path('output/qa/full_profile_sparse/result.json').read_text(encoding='utf-8'))
     sparse_profile = sparse['profiles']['1']
     validate_profile(sparse_profile, sparse['persona'], legacy.seed)
-    assert all(t['evidence_level'] == 'hypothesis' and t['information_insufficient'] and not t['quotes']
+    assert all(t['assumption'].strip() and not t['evidence_ids'] and 'evidence_level' not in t
                for t in sparse_profile['traits'].values())
     repeat = preparation['repeatability']
     tests=ET.parse('output/qa/full_profile_tests.xml').getroot().find('testsuite').attrib
@@ -92,12 +90,13 @@ def main():
         'tests': tests,
         'protected_files_checked': len(manifest), 'protected_files_changed': changed,
         'source_and_active_result_sha256_unchanged': True,
-        'legacy_profiles_match_active_result': True, 'legacy_cache_hits': len(legacy.records),
-        'legacy_decision_cache_hits_at_recorded_settings': len(decision_cache.records),
+        'legacy_profiles_match_active_result': all(baseline[a['agent_id']] == active_profiles[a['persona']['uuid']] for a in agents),
+        'legacy_cache_hits': len(legacy.records),
+        'recorded_decision_cache_payloads_verified': recorded_cache_checks,
         'full_profile_cache_hits_with_reversed_order': len(cache_provider.records),
         'all_original_fields_included': True, 'truncated_inputs': 0,
         'full_profile_seeded_assignments': 0, 'fabricated_citation_rejected': rejected,
-        'real_sparse_information_sample': {t: {k:v[k] for k in ('level','evidence_level','information_insufficient')}
+        'real_sparse_information_sample': {t: {k:v[k] for k in ('level','assumption')}
                                            for t,v in sparse_profile['traits'].items()},
         'comparison': preparation['comparison'], 'repeatability_pairs': pairs,
         'actual_successful_repeat_llm_calls': sum(record.get('source')=='ollama_live'
@@ -113,10 +112,10 @@ def main():
             'src/persona_evac/llm/private_decisions.py', 'scripts/prepare_private_profiles.py',
             'scripts/audit_private_result.py', 'scripts/audit_profile_preparation.py',
             'tests/test_full_profile.py', 'private_inspector.js', 'gaehwasan.html', 'README.md'],
-        'limitations': ['근거 수준과 생활 서술을 성향에 연결한 가정의 의미 타당성은 LLM 판단이며 사람의 행동으로 검증하지 않았습니다.',
+        'limitations': ['등급과 근거 요약의 의미 타당성은 LLM 판단이며 사람의 행동으로 검증하지 않았습니다.',
             '반복 검증은 동일 모델·다이제스트·설정과 5명 표본의 3회 추론입니다. 다른 모델·설정·장치에서의 안정성을 보장하지 않습니다.',
             'UTF-8 바이트 기반 문맥 예산은 보수적이므로 실제 토큰 수가 더 적어도 긴 입력을 명시적으로 거부할 수 있습니다.',
-            '원문 인용은 모델이 선택한 문자열 필드 전체입니다. 원문 일치 검증은 의미적으로 적절한 근거임을 보장하지 않습니다.',
+            '분류 출력은 등급과 근거 요약으로 제한하며 요약의 사실성을 자동 판정하지 않습니다.',
             '준비 결과를 활성 대피 결과에 적용하지 않았으므로 새 분류의 이동·완료율 효과는 계산하지 않았습니다.']}
     atomic_json(destination/'verification.json', report)
     print(json.dumps({k:v for k,v in report.items() if k not in {'comparison','repeatability','limitations'}}, ensure_ascii=False))

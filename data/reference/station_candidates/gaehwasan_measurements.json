@@ -30,13 +30,27 @@
         730
       ],
       "B1": [
-        376,
-        350
+        382,
+        347
       ],
       "F1": [
-        74,
+        54,
         350
       ]
+    },
+    "floor_registrations": {
+      "F1": {
+        "source_anchor_pdf": [
+          591,
+          263
+        ],
+        "target_anchor_b1_pdf": [
+          900,
+          263
+        ],
+        "rotation_degrees": -7.9,
+        "basis": "계단의 서측 접속선과 양쪽 도착부를 기준으로 등축척 회전·이동 정합. 계단 형상은 유지한다."
+      }
     },
     "note": "도면의 명시 치수로 등비 보정한 윤곽 근사. 하단 도면명 석계 표기는 본문 개화산 제목·위치와 불일치."
   },
@@ -126,85 +140,64 @@
       "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
     },
     {
-      "id": "H_W",
-      "label": "B1 서쪽 곡선 계단 → 1F",
-      "method": "drawing_ratio",
-      "drawing_page": 3,
-      "pdf_endpoints": [
-        [
-          776,
-          274
-        ],
-        [
-          793,
-          274
-        ]
-      ],
-      "measured_width_m": 4.497,
-      "estimated_width_m": 4.3,
-      "handrail_allowance_m": 0.2,
-      "uncertainty_m": 0.3,
-      "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
-    },
-    {
       "id": "H_E",
-      "label": "B1 동쪽 왕복 계단 → 1F",
+      "label": "B1 중앙 두 계단·양옆 되돌림 계단 → 1F",
       "method": "drawing_ratio",
       "drawing_page": 3,
       "pdf_endpoints": [
         [
-          912,
+          900,
           247
         ],
         [
-          914,
-          262
+          903,
+          279
         ]
       ],
-      "measured_width_m": 4.003,
-      "estimated_width_m": 3.8,
+      "measured_width_m": 8.503,
+      "estimated_width_m": 8.3,
       "handrail_allowance_m": 0.2,
       "uncertainty_m": 0.3,
       "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
     },
     {
       "id": "E_1",
-      "label": "1F → 1번 지상 출구",
+      "label": "방풍실·꺾인 외부 계단 → 1번 출구",
       "method": "drawing_ratio",
       "drawing_page": 3,
       "pdf_endpoints": [
         [
           514,
-          195
+          188
         ],
         [
-          529,
-          199
+          513,
+          203
         ]
       ],
-      "measured_width_m": 4.107,
-      "estimated_width_m": 3.91,
+      "measured_width_m": 3.977,
+      "estimated_width_m": 3.78,
       "handrail_allowance_m": 0.2,
       "uncertainty_m": 0.3,
       "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."
     },
     {
       "id": "E_2",
-      "label": "1F → 2번 지상 출구",
+      "label": "방풍실 통과 → 2번 출구",
       "method": "drawing_ratio",
       "drawing_page": 3,
       "pdf_endpoints": [
         [
-          538,
+          528,
           330
         ],
         [
-          559,
-          329
+          551,
+          328
         ]
       ],
-      "measured_width_m": 5.562,
-      "estimated_width_m": 5.36,
+      "measured_width_m": 6.108,
+      "estimated_width_m": 5.91,
       "handrail_allowance_m": 0.2,
       "uncertainty_m": 0.3,
       "note": "도면 폭을 비례 산출하고 양쪽 여유 합계 0.20m를 차감한 모델 유효폭. 실측값이 아님."

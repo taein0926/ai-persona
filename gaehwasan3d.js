@@ -6,36 +6,38 @@ import {OrbitControls} from '/vendor/three/OrbitControls.js';
 const host = document.getElementById('map3d');
 const api = {ready:false};
 window.station3D = api;
-let renderer, scene, camera, controls, root, data, people=new Map(), paths=new Map();
+let renderer, scene, floorDepthScene, floorDepthRoot, structureScene, structureRoot, camera, controls, root, data, people=new Map(), paths=new Map();
 const separation=2.5;
-let selectionScene,selectionBody;
+let selectionScene,selectionBody,labelScene,labelRoot;
 let volumeOpacity=1;
 let homeBounds;
-let floors=[], fireMesh, fireColors, volumeMesh, volumeAlpha, fireKey='', selectedLabel, selectedRoute, lastSelected, lastFloor, overview=true, flames=[];
+let floors=[], fireMesh, fireColors, volumeMesh, volumeAlpha, fireKey='', selectedLabel, selectedRoute, lastSelected, overview=true, flames=[];
 const v = p => new THREE.Vector3(p.x, elevation(p.floor), -p.y);
 const elevation = id => (data.scenario.floors.find(f=>f.id===id)?.elevation_m ?? 8)*separation;
 const palette={pre_moving:0xcaa342,walking:0x168b74,waiting:0xb33e88,queueing:0xdd8620,on_stairs:0x3166c5};
 const ray = new THREE.Raycaster(), pointer = new THREE.Vector2();
 const boxGeometry = new THREE.BoxGeometry(1,1,1);
 const material = color => new THREE.MeshStandardMaterial({color,roughness:.85,side:THREE.DoubleSide});
-const matFloor=()=>new THREE.MeshStandardMaterial({color:0xd7d9d4,roughness:1,transparent:true,opacity:.88,side:THREE.DoubleSide,depthWrite:false});
+// Slabs occlude every lower-floor object, including rails in the main scene.
+const matFloor=()=>new THREE.MeshStandardMaterial({color:0xd7d9d4,roughness:1,side:THREE.DoubleSide,depthWrite:true});
 const stairMaterial=material(0x839bb5), railMaterial=new THREE.LineBasicMaterial({color:0x355779});
+const floorDepthMaterial=new THREE.MeshBasicMaterial({colorWrite:false,depthWrite:true,depthTest:true,side:THREE.DoubleSide});
 
-function label(text, color='#243746', bg='rgba(255,255,255,.92)') {
+function label(text, color='#243746', bg='#ffffff') {
   const c=document.createElement('canvas'),ctx=c.getContext('2d');
   ctx.font='600 30px sans-serif';c.width=Math.ceil(ctx.measureText(text).width)+30;c.height=54;
   ctx.fillStyle=bg;ctx.fillRect(0,0,c.width,c.height);ctx.font='600 30px sans-serif';ctx.fillStyle=color;ctx.fillText(text,15,37);
-  const tex=new THREE.CanvasTexture(c), sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,depthTest:false,transparent:true}));
-  sprite.userData.labelWidth=c.width/c.height;sprite.userData.label=true;return sprite;
+  const tex=new THREE.CanvasTexture(c), sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,depthTest:false,depthWrite:false,transparent:true}));
+  sprite.userData.labelWidth=c.width/c.height;sprite.userData.label=true;sprite.userData.labelText=text;return sprite;
 }
 function shape(points,holes=[]) {
   const s=new THREE.Shape(points.map(([x,y])=>new THREE.Vector2(x,y)));
   for(const h of holes)s.holes.push(new THREE.Path(h.map(([x,y])=>new THREE.Vector2(x,y))));
   return s;
 }
-function slab(s,height,y,mat) {
+function slab(s,height,y,mat,parent=root) {
   const geo=new THREE.ExtrudeGeometry(s,{depth:height,bevelEnabled:false,steps:1});
-  geo.rotateX(-Math.PI/2);const m=new THREE.Mesh(geo,mat);m.position.y=y-height;root.add(m);return m;
+  geo.rotateX(-Math.PI/2);const m=new THREE.Mesh(geo,mat);m.position.y=y-height;parent.add(m);return m;
 }
 function line(points,mat,parent=root) {
   const mesh=new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),mat);parent.add(mesh);return mesh;
@@ -64,31 +66,64 @@ function sample(points,t) {
 }
 function buildStairs(s) {
   const points=stairPath(s);paths.set(s.id,points);
-  for(let k=1;k<points.length;k++) {
-    const a=points[k-1],b=points[k],dx=b.x-a.x,dz=b.z-a.z,flat=Math.hypot(dx,dz);
+  if(s.branch_paths_xyz)for(const [index,path] of s.branch_paths_xyz.entries()){
+    const branch=path.map(([x,y,z])=>new THREE.Vector3(x,z*separation,-y));
+    branch.nativeLengths=path.slice(1).map((p,i)=>Math.hypot(...p.map((n,k)=>n-path[i][k])));
+    paths.set(`${s.id}:${index}`,branch);
+  }
+  for(const landing of s.landings||[]){
+    const mesh=slab(shape(landing.polygon),landing.thickness_m,landing.elevation_m*separation,stairMaterial);
+    mesh.userData={stairId:s.id,role:'landing'};
+  }
+  const flights=s.render_mode==='floor_only'?[]:s.flights?.map(f=>({role:f.role,points:f.path_xyz.map(([x,y,z])=>new THREE.Vector3(x,z*separation,-y)),width:f.width_m}))||[{points,width:s.width_m}];
+  for(const flight of flights)for(let k=1;k<flight.points.length;k++) {
+    const a=flight.points[k-1],b=flight.points[k],width=flight.width,dx=b.x-a.x,dz=b.z-a.z,flat=Math.hypot(dx,dz);
     if(flat<.04)continue;
     const steps=Math.max(2,Math.ceil(flat/.35)),normal=new THREE.Vector3(-dz/flat,0,dx/flat),yaw=-Math.atan2(dz,dx);
     if(Math.abs(b.y-a.y)<.01) {
-      const landing=new THREE.Mesh(boxGeometry,stairMaterial);landing.scale.set(flat+s.width_m,.22,s.width_m);landing.rotation.y=yaw;landing.position.copy(a.clone().lerp(b,.5));landing.position.y-=.11;root.add(landing);
+      const landing=new THREE.Mesh(boxGeometry,stairMaterial);landing.scale.set(flat+(s.kind==='exit'?0:width),.22,width);landing.rotation.y=yaw;landing.position.copy(a.clone().lerp(b,.5));landing.position.y-=.11;root.add(landing);
+      if(s.exit_form==='bent_stair'&&k>=3)for(let i=1;i<steps;i++){
+        const p=a.clone().lerp(b,i/steps).add(new THREE.Vector3(0,.015,0));
+        line([p.clone().addScaledVector(normal,-width/2),p.clone().addScaledVector(normal,width/2)],railMaterial);
+      }
     } else {
     for(let i=0;i<steps;i++) {
       const p=a.clone().lerp(b,(i+.5)/steps),step=new THREE.Mesh(boxGeometry,stairMaterial);
-      p.y=a.y+(b.y-a.y)*(i+1)/steps;
-      step.scale.set(flat/steps,.18,s.width_m);step.rotation.y=yaw;step.position.copy(p);step.position.y-=.09;root.add(step);
+      step.userData={stairId:s.id,role:flight.role||'stair'};
+      const rise=(b.y-a.y)/steps,thickness=Math.abs(rise)+.18;
+      p.y=a.y+rise*(i+1);
+      step.scale.set(flat/steps,thickness,width);step.rotation.y=yaw;step.position.copy(p);step.position.y-=thickness/2;root.add(step);
+      if(s.flights){
+        const edge=a.clone().lerp(b,(i+1)/steps);edge.y+=.012;
+        const tread=line([edge.clone().addScaledVector(normal,-width/2),edge.clone().addScaledVector(normal,width/2)],railMaterial);
+        tread.userData={stairId:s.id,role:'tread'};
+      }
     }
     }
-    for(const sign of [-1,1]) {
+    for(const sign of s.rail_paths_xyz?[]:[-1,1]) {
       // Leave the inner side of a return landing open at both flight junctions.
       const flatLanding=Math.abs(b.y-a.y)<.01 && s.kind!=='exit';
       const start=a.clone(),end=b.clone();
-      if(flatLanding&&sign<0){const inset=Math.min(.49,s.width_m/2/flat);start.lerp(b,inset);end.lerp(a,inset);}
-      line([start.addScaledVector(normal,sign*s.width_m/2).add(new THREE.Vector3(0,.9,0)),
-      end.addScaledVector(normal,sign*s.width_m/2).add(new THREE.Vector3(0,.9,0))],railMaterial);
+      if(flatLanding&&sign<0){const inset=Math.min(.49,width/2/flat);start.lerp(b,inset);end.lerp(a,inset);}
+      if(!s.flights||!flatLanding)line([start.addScaledVector(normal,sign*width/2).add(new THREE.Vector3(0,.9,0)),
+      end.addScaledVector(normal,sign*width/2).add(new THREE.Vector3(0,.9,0))],railMaterial);
+    }
+  }
+  if(s.rail_paths_xyz){
+    for(const rail of [...s.rail_paths_xyz,s.center_handrail_xyz]){
+      const points=rail.map(([x,y,z])=>new THREE.Vector3(x,z*separation+.9,-y));
+      const curve=new THREE.CurvePath();
+      for(let i=1;i<points.length;i++)curve.add(new THREE.LineCurve3(points[i-1],points[i]));
+      root.add(new THREE.Mesh(new THREE.TubeGeometry(curve,Math.max(8,points.length*8),.045,6,false),stairMaterial));
+      for(const [x,y,z] of rail){
+        const post=new THREE.Mesh(new THREE.CylinderGeometry(.035,.035,.9,6),stairMaterial);
+        post.position.set(x,z*separation+.45,-y);root.add(post);
+      }
     }
   }
   if(s.kind==='exit') {
-    const badge=label(s.id==='E_1'?'① 1번 출구':'② 2번 출구','#4b3e00','#ffdd54');
-    badge.position.copy(points.at(-1)).add(new THREE.Vector3(0,3,0));root.add(badge);
+    const badge=label(s.id==='E_1'?'1번 출구':'2번 출구','#4b3e00','#ffdd54');
+    badge.position.copy(points.at(-1)).add(new THREE.Vector3(0,3,0));labelRoot.add(badge);
   }
 }
 function makePerson(a) {
@@ -116,7 +151,21 @@ function pointFor(a,time) {
   const p=position(a,time),s=p.segment;
   if(p.status==='evacuated')return {p,status:p.status,point:null};
   if(!s)return {p,status:p.status,point:v(a.spawn)};
+  if(s.native_motion?.length){
+    const motion=s.native_motion;let lo=0,hi=motion.length-1;
+    while(lo<hi){const mid=Math.ceil((lo+hi)/2);if(motion[mid][0]<=time)lo=mid;else hi=mid-1;}
+    const a=motion[lo],b=motion[Math.min(lo+1,motion.length-1)],t=b[0]>a[0]?Math.max(0,Math.min(1,(time-a[0])/(b[0]-a[0]))):0;
+    return {p,status:p.status,point:new THREE.Vector3(a[1]+t*(b[1]-a[1]),(a[3]+t*(b[3]-a[3]))*separation,-a[2]-t*(b[2]-a[2]))};
+  }
   if(s.status==='on_stairs') {
+    const stair=data.scenario.stairs.find(x=>x.id===s.stair_id);
+    if(stair.branch_paths_xyz){
+      const branch=Math.min(stair.branch_paths_xyz.length-1,Math.floor((s.stair_lane||0)/(stair.parallel_lanes/stair.branch_paths_xyz.length)));
+      const source=paths.get(`${s.stair_id}:${branch}`),pts=source.map(p=>p.clone());pts.nativeLengths=source.nativeLengths;
+      const start=v(s.from).sub(source[0]),end=v(s.to).sub(source.at(-1));
+      for(let i=0;i<pts.length;i++)pts[i].add(i<2?start:end);
+      return {p,status:p.status,point:sample(pts,p.progress)};
+    }
     const pts=paths.get(s.stair_id),q=sample(pts,p.progress);
     // Distribute visible users across the entrance width. This is an animation
     // of the capacity model, not a claim to simulate overtaking on stairs.
@@ -129,11 +178,18 @@ function pointFor(a,time) {
 function updateLabels() {
   const units=(camera.top-camera.bottom)/camera.zoom/Math.max(1,host.clientHeight);
   root.traverse(n=>{if(n.userData.label)n.scale.set(n.userData.labelWidth*25*units,25*units,1);});
+  labelRoot?.traverse(n=>{if(n.userData.label)n.scale.set(n.userData.labelWidth*25*units,25*units,1);});
   selectionScene?.traverse(n=>{if(n.userData.label)n.scale.set(n.userData.labelWidth*25*units,25*units,1);});
 }
 function render() {
   if(!api.ready||!root)return;updateLabels();renderer.clear();renderer.render(scene,camera);
-  // A separate final pass keeps selection visible above transparent floors/smoke.
+  // Keep the separate structure pass behind upper slabs and in front of lower
+  // ones, using the same floor geometry (including actual stair openings).
+  renderer.render(floorDepthScene,camera);
+  renderer.render(structureScene,camera);
+  // All station names render after geometry; upper floors cannot repaint them.
+  renderer.clearDepth();renderer.render(labelScene,camera);
+  // A separate final pass keeps the selected person visible above floors/smoke.
   renderer.clearDepth();renderer.render(selectionScene,camera);
 }
 function buildSelection() {
@@ -152,7 +208,7 @@ function buildSelection() {
 }
 function fit() {
   overview=true;stationView.follow=false;
-  root.updateMatrixWorld(true);homeBounds??=new THREE.Box3().setFromObject(root);const bounds=homeBounds,center=bounds.getCenter(new THREE.Vector3());
+  root.updateMatrixWorld(true);structureRoot.updateMatrixWorld(true);homeBounds??=new THREE.Box3().setFromObject(root).union(new THREE.Box3().setFromObject(structureRoot));const bounds=homeBounds,center=bounds.getCenter(new THREE.Vector3());
   controls.target.copy(center);camera.position.copy(center).add(new THREE.Vector3(-55,85,145));camera.lookAt(center);camera.updateMatrixWorld(true);
   const view=new THREE.Box3();
   for(const x of [bounds.min.x,bounds.max.x])for(const y of [bounds.min.y,bounds.max.y])for(const z of [bounds.min.z,bounds.max.z])view.expandByPoint(new THREE.Vector3(x,y,z).applyMatrix4(camera.matrixWorldInverse));
@@ -196,7 +252,7 @@ function buildTrain() {
       for(const t of [-.35,-.12,.12,.35])box(len*t,-.2,sign*(w/2+.07),1.1,1.75,.05,door);
     }
   }
-  const badge=label('⑤ 5호선 정차 열차','#ffffff',train.color);badge.position.set(35,1,-4);root.add(badge);
+  const badge=label('5호선 정차 열차','#ffffff',train.color);badge.position.set(35,1,-4);labelRoot.add(badge);
 }
 function fireUpdate(time) {
   if(!fireMesh)return;
@@ -229,25 +285,49 @@ function fireUpdate(time) {
 }
 function rebuild() {
   homeBounds=null;
+  if(labelRoot){labelScene.remove(labelRoot);labelRoot.traverse(n=>{n.material?.map?.dispose();n.material?.dispose();});}
+  labelRoot=new THREE.Group();labelScene.add(labelRoot);
   if(root) {scene.remove(root);root.traverse(n=>{if(n.geometry&&n.geometry!==boxGeometry)n.geometry.dispose();if(n.material?.map)n.material.map.dispose();if(n.material&&n.material!==stairMaterial&&n.material!==railMaterial)n.material.dispose();});}
-  root=new THREE.Group();scene.add(root);people.clear();paths.clear();floors=[];fireMesh=null;volumeMesh=null;flames=[];fireKey='';lastFloor=null;
+  if(structureRoot){structureScene.remove(structureRoot);structureRoot.traverse(n=>{if(n.geometry&&n.geometry!==boxGeometry)n.geometry.dispose();n.material?.dispose();});}
+  if(floorDepthRoot)floorDepthScene.remove(floorDepthRoot);
+  floorDepthRoot=new THREE.Group();floorDepthScene.add(floorDepthRoot);
+  structureRoot=new THREE.Group();structureScene.add(structureRoot);
+  root=new THREE.Group();scene.add(root);people.clear();paths.clear();floors=[];fireMesh=null;volumeMesh=null;flames=[];fireKey='';
   for(const f of data.scenario.floors) {
     const mats=[];
     const polys=data.scenario.display3d_openings?.[separation.toFixed(1)]?.[f.id]||data.scenario.display3d?.[f.id]||f.polygons.map(outer=>({outer,holes:[]}));
-    for(const p of polys){const mat=matFloor();slab(shape(p.outer,p.holes),.3,elevation(f.id),mat);mats.push(mat);
-      for(const hole of p.holes)line(hole.map(([x,y])=>new THREE.Vector3(x,elevation(f.id)+.03,-y)),railMaterial);
+    for(const p of polys){const mat=matFloor();const body=slab(shape(p.outer,p.holes),.3,elevation(f.id),mat);body.userData={floorId:f.id,role:'floor'};mats.push(mat);
+      const depthBody=new THREE.Mesh(body.geometry,floorDepthMaterial);depthBody.position.copy(body.position);depthBody.userData={floorId:f.id,role:'floor_depth'};floorDepthRoot.add(depthBody);
+      for(const hole of p.holes){const edge=line(hole.map(([x,y])=>new THREE.Vector3(x,elevation(f.id)+.03,-y)),railMaterial.clone(),structureRoot);edge.userData={floorId:f.id,kind:'floor_edge'};}
     }
-    for(const p of polys)line(p.outer.map(([x,y])=>v({floor:f.id,x,y}).add(new THREE.Vector3(0,.02,0))),new THREE.LineBasicMaterial({color:0x83918f,transparent:true,opacity:.6}));
+    for(const p of polys){const edge=line(p.outer.map(([x,y])=>v({floor:f.id,x,y}).add(new THREE.Vector3(0,.02,0))),new THREE.LineBasicMaterial({color:0x83918f,transparent:true,opacity:.6,depthTest:true}),structureRoot);edge.userData={floorId:f.id,kind:'floor_edge'};}
     for(const o of f.obstacles) {
-      const mat=material(o.label==='기둥'?0x82918f:0xb7c1bf);mat.transparent=true;mat.depthWrite=false;mats.push(mat);
-      slab(shape(o.polygon),o.label==='기둥'?1.8:.7,elevation(f.id)+(o.label==='기둥'?1.8:.7),mat);
+      if(o.display===false||o.render_as==='boundary_walls')continue;
+      const mat=material(o.kind==='fare_gate'?0x3d6f79:o.label==='기둥'?0x82918f:0xb7c1bf);
+      const height=o.height_m??(o.label==='기둥'?1.8:.7);
+      const body=slab(shape(o.polygon),height,elevation(f.id)+height,mat,structureRoot);
+      body.userData={floorId:f.id,role:'structure',kind:o.kind==='fare_gate'?'gate':o.label==='기둥'?'column':'building',label:o.label};
+      if(o.kind==='fare_gate'){body.userData.fareGate=true;body.userData.height_m=height;}
+      const edge=new THREE.LineSegments(new THREE.EdgesGeometry(body.geometry,25),new THREE.LineBasicMaterial({color:o.kind==='fare_gate'?0x214a55:0x64716e}));body.add(edge);
+    }
+    for(const wall of f.walls||[]){
+      const body=slab(shape(wall.polygon),wall.height_m,elevation(f.id)+wall.height_m,material(0xa5afab),structureRoot);
+      body.userData={floorId:f.id,role:'structure',kind:'wall',wallId:wall.id,label:wall.label};
+      body.add(new THREE.LineSegments(new THREE.EdgesGeometry(body.geometry,25),new THREE.LineBasicMaterial({color:0x818d87})));
     }
     const coordinates=f.id==='F1'?[86,47]:f.id==='B1'?[83,41]:[33,38];
     const title=label(f.id==='F1'?'1F · 지상 대합실':f.id==='B1'?'B1 · 원형 대합실':'B2 · 곡선 승강장');
-    title.position.copy(v({floor:f.id,x:coordinates[0],y:coordinates[1]})).add(new THREE.Vector3(0,2,0));root.add(title);
+    title.position.copy(v({floor:f.id,x:coordinates[0],y:coordinates[1]})).add(new THREE.Vector3(0,2,0));labelRoot.add(title);
     floors.push({id:f.id,mats});
   }
   for(const s of data.scenario.stairs)buildStairs(s);
+  for(const vestibule of data.scenario.vestibules||[]){
+    if(vestibule.render_mode==='floor_only')continue;
+    for(const [a,b] of vestibule.door_lines){
+      const p=v({floor:vestibule.floor,x:a[0],y:a[1]}),q=v({floor:vestibule.floor,x:b[0],y:b[1]});
+      line([p,p.clone().add(new THREE.Vector3(0,2.1,0)),q.clone().add(new THREE.Vector3(0,2.1,0)),q],railMaterial);
+    }
+  }
   buildTrain();
   for(const a of data.agents)makePerson(a);
   buildSelection();
@@ -276,7 +356,7 @@ api.init = result => {
     try {
       renderer=new THREE.WebGLRenderer({antialias:true,alpha:false});renderer.autoClear=false;renderer.setPixelRatio(Math.min(window.devicePixelRatio,1.5));renderer.setClearColor(0xeef1f1);
       renderer.domElement.setAttribute('aria-label','개화산역 입체 안내도. 마우스로 회전하고 확대할 수 있습니다.');host.append(renderer.domElement);
-      scene=new THREE.Scene();selectionScene=new THREE.Scene();scene.add(new THREE.HemisphereLight(0xffffff,0x98a6b3,1.3));const light=new THREE.DirectionalLight(0xffffff,1.5);light.position.set(-30,100,80);scene.add(light);
+      scene=new THREE.Scene();floorDepthScene=new THREE.Scene();structureScene=new THREE.Scene();selectionScene=new THREE.Scene();labelScene=new THREE.Scene();const ambient=new THREE.HemisphereLight(0xffffff,0x98a6b3,1.3);scene.add(ambient);const light=new THREE.DirectionalLight(0xffffff,1.5);light.position.set(-30,100,80);scene.add(light);structureScene.add(ambient.clone(),light.clone());
       camera=new THREE.OrthographicCamera(-100,100,60,-60,.1,1200);controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=false;controls.minPolarAngle=.15;controls.maxPolarAngle=Math.PI*.48;controls.minZoom=.5;controls.maxZoom=12;
       controls.addEventListener('change',render);controls.addEventListener('start',()=>{stationView.follow=false;api.update(data,state.time,state.selected);});
       let down;
@@ -301,11 +381,12 @@ api.follow=()=>{stationView.follow=true;overview=false;camera.zoom=Math.max(4,ca
 api.update=(result,time,selected)=>{
   if(!api.ready)return;
   if(data!==result){api.init(result);return;}
-  const active=result.agents.find(a=>a.agent_id===selected),q=active?pointFor(active,time):null;
+  const active=result.agents.find(a=>a.agent_id===selected);let q=null;
   for(const a of result.agents) {
     const info=pointFor(a,time),g=people.get(a.agent_id);g.visible=!!info.point;
     if(info.point)g.position.copy(info.point);
     const isSelected=a.agent_id===selected;
+    if(isSelected)q=info;
     const visual=agentVisual(a,time);
     g.userData.mat.color.set(visual.color);
     g.userData.mat.depthTest=true;g.children.forEach(n=>n.renderOrder=0);
@@ -319,8 +400,6 @@ api.update=(result,time,selected)=>{
   if(stationView.follow&&q?.point) {
     const delta=q.point.clone().sub(controls.target);controls.target.add(delta);camera.position.add(delta);controls.update();
   } else if(stationView.follow&&q?.status==='evacuated')fit();
-  const activeFloor=stationView.follow&&q?.point?q.p.segment?.from.floor||'B2':null;
-  if(lastFloor!==activeFloor) {for(const f of floors)for(const m of f.mats)m.opacity=activeFloor&&elevation(f.id)>elevation(activeFloor)?.18:.88;lastFloor=activeFloor;}
   fireUpdate(time);
   render();
 };

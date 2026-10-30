@@ -26,7 +26,7 @@ $composeProject='persona-full100-'+$RunName.ToLowerInvariant()
 $compose=@{services=@{benchmark=@{
     image="sha256:$image";pull_policy='never';working_dir='/benchmark';entrypoint=@('python')
     environment=@{PYTHONPATH='/benchmark/src';PYTHONDONTWRITEBYTECODE='1';PYTHONUNBUFFERED='1';
-        OLLAMA_BASE_URL='http://host.docker.internal:11434';OLLAMA_MODEL='qwen3:4b';
+        OLLAMA_BASE_URL='http://host.docker.internal:11434';OLLAMA_MODEL='gemma4:e2b-it-qat';
         LLM_PROVIDER='ollama';PERSONA_EVAC_OUTPUT='/measurement/shared_output'}
     volumes=@(
         @{type='bind';source=$workspace;target='/benchmark';read_only=$true},

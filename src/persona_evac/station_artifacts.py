@@ -12,6 +12,7 @@ def station_signature():
         "station_artifacts.py",
         "integration/station.py",
         "integration/station_dynamics.py",
+        "integration/station_connectors.py",
         "integration/station_geometry.py",
         "integration/station_layout.py",
         "integration/stair_dynamics.py",
@@ -20,11 +21,14 @@ def station_signature():
         "integration/personal_space.py",
         "integration/private_strategy.py",
         "integration/fds_environment.py",
+        "integration/fds_station_geometry.py",
         "persona/experimental_profile.py",
         "persona/full_profile.py",
+        "persona/station_population.py",
         "llm/private_decisions.py",
         "llm/ollama.py",
-        "llm/providers.py",
+        "llm/common.py",
+        "llm/baseline_profile.py",
     ]
     paths = [ROOT / "src/persona_evac" / name for name in names]
     paths += [

@@ -13,8 +13,10 @@ from persona_evac.integration.station_geometry import floor_geometry
 
 
 def test_compact_counterflow_at_f1_corner_can_back_off_and_exit():
-    c=json.loads(Path('configs/scenarios/gaehwasan.json').read_text(encoding='utf8'))
-    geom=pedestrian_geometry(floor_geometry(next(f for f in c['floors'] if f['id']=='F1')))
+    # 기록된 정체 좌표와 당시 모서리 형상을 한 쌍으로 고정한다.
+    # 현재 역사 도면이 바뀌어도 이 회복 알고리즘의 회귀 사례는 유지한다.
+    floor=json.loads(Path('tests/fixtures/recorded_counterflow_floor.json').read_text(encoding='utf8'))
+    geom=pedestrian_geometry(floor_geometry(floor))
     # Actual recorded positions and goals; three people head to exit 1, one to exit 2.
     records=[
         ((112.6588073882838,29.10994942690381),(118.79625029166667,40.10227108333333)),

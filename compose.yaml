@@ -1,4 +1,11 @@
 services:
+  bootstrap:
+    profiles: ["setup"]
+    image: python:3.12-slim
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+    command: ["python", "scripts/runtime_data.py", "install"]
   app:
     build:
       context: .
@@ -10,6 +17,8 @@ services:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       PYTHONPATH: /app/src
     env_file: .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./:/app:ro
       - ./output:/app/output
@@ -35,28 +44,17 @@ services:
     command: ["persona-evac", "fetch-nemotron", "--output", "data/raw/nemotron_personas_10.jsonl", "--count", "10"]
     volumes:
       - ./data:/app/data
-  openai-experiment:
+  ollama-experiment:
     build:
       context: .
       target: base
-    command: ["persona-evac", "run", "--config", "configs/experiments/mvp_openai.json"]
+    command: ["persona-evac", "run", "--config", "configs/experiments/mvp_ollama.json"]
     environment:
       PERSONA_EVAC_OUTPUT: /app/output
       OLLAMA_BASE_URL: http://host.docker.internal:11434
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-}
-    env_file: .env
-    volumes:
-      - ./data:/app/data
-      - ./output:/app/output
-  groq-experiment:
-    build:
-      context: .
-      target: base
-    command: ["persona-evac", "run", "--config", "configs/experiments/mvp_openai.json"]
-    environment:
-      PERSONA_EVAC_OUTPUT: /app/output
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      LLM_PROVIDER: ollama
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file: .env
     volumes:
       - ./data:/app/data

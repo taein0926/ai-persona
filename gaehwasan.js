@@ -21,12 +21,28 @@ function buildStationMap() {
   svg('path',{d:'M0 0 L10 5 L0 10 Z',fill:'#91baff'},'',marker);
   for(const f of c.floors) {
     for(const points of f.polygons) stationPolygon(points,f.id,{class:'floor-shape'});
+    for(const opening of f.stair_voids||[])stationPolygon(opening,f.id,{fill:'#102127',stroke:'#83918f','stroke-width':.7});
     for(const o of f.obstacles) {
+      if(o.display===false||o.render_as==='boundary_walls')continue;
       stationPolygon(o.polygon,f.id,{fill:'#102127',stroke:'#526c72','stroke-width':.7});
-      if(o.label==='기둥') continue;
+      if(o.label==='기둥'||o.kind==='fare_gate') continue;
       const center=o.polygon.reduce((p,v)=>[p[0]+v[0]/o.polygon.length,p[1]+v[1]/o.polygon.length],[0,0]);
       const p=xy({floor:f.id,x:center[0],y:center[1]});
       svg('text',{'data-map-floor':f.id,x:p.x,y:p.y,fill:'#8fa8af','font-size':9,'text-anchor':'middle'},o.label);
+    }
+  }
+  for(const floor of c.floors)for(const wall of floor.walls||[]){
+    stationPolygon(wall.polygon,floor.id,{fill:'#1d2628',stroke:'#647674','stroke-width':.8});
+  }
+  for(const gate of c.fare_gates||[]){
+    stationPolygon(gate.polygon,gate.floor,{fill:'#5ce6ad33',stroke:'#5ce6ad','stroke-width':.5,'data-fare-gate':gate.id});
+  }
+  for(const vestibule of c.vestibules||[]){
+    if(vestibule.render_mode==='floor_only')continue;
+    stationPolygon(vestibule.polygon,vestibule.floor,{fill:'#85d9e419',stroke:'#85d9e4','stroke-width':.7});
+    for(const [a,b] of vestibule.door_lines){
+      const p=stationXY({floor:vestibule.floor,x:a[0],y:a[1]}),q=stationXY({floor:vestibule.floor,x:b[0],y:b[1]});
+      svg('line',{'data-map-floor':vestibule.floor,x1:p.x,y1:p.y,x2:q.x,y2:q.y,stroke:'#85d9e4','stroke-dasharray':'3 3'});
     }
   }
   const stairLayer=svg('g',{id:'stationStairs'});
@@ -48,6 +64,11 @@ function buildStationMap() {
   }
   for(const s of c.stairs) {
     const n=c.nodes[s.from_node], p=xy(n), t=s.portal_tangent;
+    if(s.render_mode==='floor_only'){
+      const dest=xy(c.nodes[s.to_node]);
+      svg('text',{'data-map-floor':n.floor,x:dest.x,y:dest.y-12,fill:'#74e0bb','font-size':15,'font-weight':700},stationExitLabel(s.to_node));
+      continue;
+    }
     const width=s.width_m*stationScale, normal=[-t[1],t[0]], depth=12;
     // A tread symbol and a width-sized entry line; the physical stair length is timed.
     const corners=[[-1,-1],[1,-1],[1,1],[-1,1]].map(([a,b])=>[
@@ -116,7 +137,8 @@ function setupStationView() {
   const mini=$('stationMiniMap');mini.replaceChildren();
   for(const f of state.data.scenario.floors) {
     for(const points of f.polygons) stationPolygon(points,f.id,{fill:'#2e4a53',stroke:'#839ba3','stroke-width':3},mini);
-    for(const o of f.obstacles) stationPolygon(o.polygon,f.id,{fill:'#102127'},mini);
+    for(const o of f.obstacles)if(o.display!==false&&o.render_as!=='boundary_walls')stationPolygon(o.polygon,f.id,{fill:'#102127'},mini);
+    for(const wall of f.walls||[])stationPolygon(wall.polygon,f.id,{fill:'#1d2628'},mini);
     svg('text',{x:20,y:stationPanels[f.id]-250,fill:'#cce0db','font-size':52},f.id==='F1'?'1F':f.id,mini);
   }
   for(const s of state.data.scenario.stairs) {

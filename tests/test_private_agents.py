@@ -305,8 +305,10 @@ def test_initial_motion_replanning_and_fallback_have_no_hidden_route_oracle(monk
     import persona_evac.integration.station as station
     c=json.loads(Path('configs/scenarios/gaehwasan.json').read_text(encoding='utf-8'))
     modified=deepcopy(c)
-    modified['nodes']['A_W_in']['x']+=5
-    modified['stairs'][0]['length_m']*=1.4
+    # 미관측 지상 출구를 바꾼다. 현재 승강장의 실제 물리 경계를 바꾸면
+    # 판단 입력이 같아도 JuPedSim 보행 좌표는 달라질 수 있다.
+    modified['nodes']['E_2_out']['x']+=5
+    next(s for s in modified['stairs'] if s['id']=='E_2')['length_m']*=1.4
     def forbidden(*args,**kwargs):raise AssertionError('전체 지도 경로 탐색을 판단에 사용했습니다.')
     monkeypatch.setattr(station,'_route',forbidden,raising=False)
     class Scripted:
@@ -329,16 +331,17 @@ def test_initial_motion_replanning_and_fallback_have_no_hidden_route_oracle(monk
     assert bool(one['behavior']['fallback_count'])==failed_model
 
 
-def test_parallel_http_requests_isolate_people_and_reuse_individual_caches(tmp_path):
+def test_parallel_http_requests_isolate_people_and_reuse_individual_caches(tmp_path,monkeypatch):
     from threading import Barrier,Event,Lock
     import httpx
-    from persona_evac.llm.ollama import LocalOllama
+    from persona_evac.llm.ollama import LocalOllama,DEFAULT_MODEL
     from persona_evac.llm.private_decisions import PrivateDecisions
 
+    monkeypatch.setenv('OLLAMA_MODEL',DEFAULT_MODEL)
     barrier=Barrier(2);second_done=Event();lock=Lock();requests=[];finished=[]
     def respond(request):
         if request.url.path=='/api/tags':
-            return httpx.Response(200,json={'models':[{'name':'qwen3:4b','digest':'parallel-fixture'}]})
+            return httpx.Response(200,json={'models':[{'name':DEFAULT_MODEL,'digest':'parallel-fixture'}]})
         body=json.loads(request.content)
         people=json.loads(body['messages'][1]['content'])
         assert len(people)==1 and len(body['messages'])==2

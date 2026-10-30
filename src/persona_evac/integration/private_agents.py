@@ -12,7 +12,7 @@ from shapely.geometry import Polygon
 from persona_evac.agent_policy import POLICY,VERSIONS,POLICY_HASH
 from persona_evac.persona.experimental_profile import ExperimentalProfiles
 from persona_evac.integration.agent_memory import AgentMemory
-from persona_evac.integration.personal_space import PersonalSpace,OccludedSensor,SENSOR,smoke_label,heat_label,observed_connector
+from persona_evac.integration.personal_space import PersonalSpace,OccludedSensor,SENSOR,smoke_label,heat_label,observed_connector_checker,station_stair_memories
 from persona_evac.integration.private_strategy import resolve_private
 from persona_evac.llm.private_decisions import PrivateDecisions,validate_private
 
@@ -27,8 +27,8 @@ def default_choice(o):
 
 
 class PrivateMind(AgentMemory):
-    def __init__(self,agent,profile):
-        super().__init__(agent);self.profile=profile;self.space=PersonalSpace(agent['persona'])
+    def __init__(self,agent,profile,prior_landmarks=()):
+        super().__init__(agent);self.profile=profile;self.space=PersonalSpace(agent['persona'],agent.get('mapping'),prior_landmarks)
         self.pending=set();self.routine_count=0;self.emergency_count=0;self.selected=None
         self.last_floor=agent.get('spawn',{}).get('floor','B2');self.last_wait=0;self.anchor=None
         self.navigation_updates=[];self.failed_lanes={};self.decision_refs=[]
@@ -107,7 +107,8 @@ class PrivateController:
         self.profiles=self.profiles_provider.prepare(agents)
         self.policy_versions={**VERSIONS,'profile':self.profiles_provider.version}
         self.profile_inference_calls=sum(record.get('source')=='ollama_live' for record in self.profiles_provider.records)
-        self.minds={a['agent_id']:PrivateMind(a,self.profiles[a['agent_id']]) for a in agents}
+        prior_landmarks=station_stair_memories(nodes,stairs)
+        self.minds={a['agent_id']:PrivateMind(a,self.profiles[a['agent_id']],prior_landmarks) for a in agents}
         self.sensor=OccludedSensor(areas,nodes,stairs,fire,(physical_config or {}).get('wayfinding_signs',[]),physical_config)
         self.decisions=[];self.navigation_updates=[];self.safety_rejections=[]
         self.local_geom_cache={};self.decision_batches=0
@@ -173,13 +174,14 @@ class PrivateController:
         if current is None:
             r['navigation_blocked']='no_observed_reachable_frontier_or_portal';return
         goal=None;portal=False;lane=None;stage=None;journey=None
+        connector=observed_connector_checker(self.areas[r['area']]['geometry'],r['pos'])
         if r['target'] in self.stairs and math.dist(r['pos'],current['position'])<4.5:
             # Entrance-local points only. Landing admissibility stays inside physics.
             visible={p['id']:p for p in mind.space.last_visible_people if p.get('area',r['area'])==r['area']};candidates=[]
             for option,lane_number in zip(self.areas[r['area']]['lanes'][r['target']],self.stairs[r['target']]['entry_lane_numbers']):
                 j,s,p=option
                 if not self.sensor.visible(r['area'],r['floor'],r['pos'],p,now):continue
-                if not observed_connector(self.areas[r['area']]['geometry'],r['pos'],p):continue
+                if not connector(p):continue
                 ahead=sum(math.dist(person['position'],p)<3 for person in visible.values())
                 own_failure=mind.failed_lanes.get((r['target'],lane_number),0)
                 score=math.dist(r['pos'],p)/r['agent']['desired_speed_mps']+ahead*1.2+own_failure*5
@@ -191,7 +193,7 @@ class PrivateController:
                 d=math.dist(r['pos'],p)
                 if d<=.15:continue
                 if d>4.5:break
-                if self.sensor.visible(r['area'],r['floor'],r['pos'],p,now) and observed_connector(self.areas[r['area']]['geometry'],r['pos'],p):
+                if self.sensor.visible(r['area'],r['floor'],r['pos'],p,now) and connector(p):
                     goal=tuple(p)
                 else:break
             if goal is None:
@@ -310,7 +312,7 @@ class PrivateController:
 
     def transferred(self,r,area,floor,pos,now,stair_id):
         mind=self.minds[r['agent']['agent_id']];mind.space.traversed(stair_id,area,floor,pos,now)
-        mind.pending.add('floor_changed');r['target']='explore:none';r['goal_is_portal']=False
+        mind.pending.add('new_route' if self.stairs[stair_id].get('kind')=='fare_gate' else 'floor_changed');r['target']='explore:none';r['goal_is_portal']=False
         mind.space.last_sense=-1e9
 
     def visible_helper(self,r,now):

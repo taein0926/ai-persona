@@ -22,7 +22,7 @@ from persona_evac.assignment import (
 )
 from persona_evac.empirical import EmpiricalResolver, load_empirical_records
 from persona_evac.hashing import sha256_file, sha256_value, stable_seed
-from persona_evac.llm import GroqProvider, MockProvider, OpenAIProvider, OllamaProvider
+from persona_evac.llm import MockProvider, OllamaProvider
 from persona_evac.persona.sampling import load_personas, persona_manifest, stratified_sample
 from persona_evac.schemas import (
     AgentResult,
@@ -254,16 +254,12 @@ def run_experiment(config_path: Path) -> Path:
     provider_name = os.environ.get(
         "LLM_PROVIDER", os.environ.get("PERSONA_EVAC_PROVIDER", config["provider"])
     )
-    if provider_name == "openai":
-        provider = OpenAIProvider()
-    elif provider_name == "groq":
-        provider = GroqProvider()
-    elif provider_name == "ollama":
+    if provider_name == "ollama":
         provider = OllamaProvider()
     elif provider_name == "mock":
         provider = MockProvider()
     else:
-        raise ValueError(f"Unsupported LLM_PROVIDER: {provider_name}")
+        raise ValueError(f"지원하지 않는 LLM_PROVIDER입니다: {provider_name}. 모델 추론은 로컬 Ollama만 지원합니다.")
     scenario_context_payload = {
         "scenario": scenario["name"],
         "multiple_exits": True,

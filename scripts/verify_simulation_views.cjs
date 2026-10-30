@@ -1,4 +1,4 @@
-const {chromium}=require('C:/Users/admin/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const {chromium}=require('playwright');
 const assert=require('assert'),fs=require('fs');
 (async()=>{
   const browser=await chromium.launch({headless:true,channel:'chrome'});

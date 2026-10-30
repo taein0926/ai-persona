@@ -46,21 +46,54 @@ def smoke_label(k):return 'opaque' if k>=1 else 'dense' if k>=.3 else 'light' if
 def heat_label(t):return 'hot' if t>=60 else 'warm' if t>=40 else 'normal'
 def hazard_level(h):return max({'clear':0,'light':1,'dense':2,'opaque':3}[h['smoke']],{'normal':0,'warm':1,'hot':3}[h['heat']])
 
+
+def familiarity_basis(persona, mapping=None):
+    estimate=(mapping or {}).get('familiarity')
+    if estimate is None:return residence_basis(persona)
+    from persona_evac.schemas import StationFamiliarity
+    estimate=StationFamiliarity.model_validate(estimate)
+    return {'level':estimate.level, 'assumption':estimate.assumption,
+            'classification_source':'llm', 'prior_version':PRIOR['llm_familiarity']['version'],
+            'prior_hash':PRIOR_HASH, 'distance_to_station_m':None, 'current_conditions_known':False}
+
+
+def station_stair_memories(nodes, stairs):
+    """Only static stair entrances and floor links, without hazards or route maps."""
+    result=[]
+    for sid,stair in sorted(stairs.items()):
+        if stair.get('kind')=='fare_gate':continue
+        origin=nodes[stair['from_node']];destination=nodes[stair['to_node']]
+        result.append({'id':sid, 'area':origin.get('area','hall'), 'floor':origin['floor'],
+            'position':[origin['x'],origin['y']], 'to_floor':destination['floor'],
+            'to_area':destination.get('area'), 'kind':'exit_stair' if destination['floor']=='OUTSIDE' else 'up_stair'})
+    return result
+
 def observed_connector(geometry,start,end):
     """Allow recovery from the unchanged engine's soft wall contact, never deepen it.
 
     This changes neither body radius nor engine collision rules. Navigation cannot
     freeze just because an AVM center is already slightly inside its comfort margin.
     """
-    line=LineString([start,end])
-    if not geometry.covers(line):return False
-    clearance=max(0,min(.22,geometry.boundary.distance(Point(start))-.00001))
-    return geometry.covers(line.buffer(clearance)) if clearance else True
+    return observed_connector_checker(geometry,start)(end)
+
+
+def observed_connector_checker(geometry,start,boundary=None):
+    """한 위치의 후보 검사에서만 공통 벽 거리를 재사용한다."""
+    start=tuple(start);clearance=None
+    def check(end):
+        nonlocal clearance
+        line=LineString([start,end])
+        if not geometry.covers(line):return False
+        if clearance is None:
+            edge=geometry.boundary if boundary is None else boundary
+            clearance=max(0,min(.22,edge.distance(Point(start))-.00001))
+        return geometry.covers(line.buffer(clearance)) if clearance else True
+    return check
 
 
 class PersonalSpace:
-    def __init__(self,persona):
-        self.uuid=persona['uuid'];self.familiarity=residence_basis(persona)
+    def __init__(self,persona,mapping=None,prior_landmarks=()):
+        self.uuid=persona['uuid'];self.familiarity=familiarity_basis(persona,mapping)
         self.landmarks={};self.maps={};self.observations=[];self.last_visible_people=[]
         self._observation_index={};self._indexed_observations=self.observations;self._indexed_observation_count=0
         self.last_risk={'smoke':'clear','heat':'normal'};self.last_observation_ids=[];self.current_origin_links=[]
@@ -70,11 +103,12 @@ class PersonalSpace:
         self.people_observations=[]
         self.visible_landmark_ids=set();self.people_view_active=False
         self._shortest_cache=None
-        if self.familiarity['level']=='limited':
-            for item in PRIOR['landmarks']:
-                self.landmarks[item['id']]={**deepcopy(item),'source':'residential_prior','observed_at_s':None,
+        if self.familiarity['level'] in {'limited','familiar'}:
+            prior=prior_landmarks if self.familiarity['level']=='familiar' else PRIOR['landmarks']
+            for item in prior:
+                self.landmarks[item['id']]={**deepcopy(item),'source':'familiarity_prior' if self.familiarity['level']=='familiar' else 'residential_prior','observed_at_s':None,
                     'current_state':None,'observation_id':None,'anchors':[]}
-                self.landmarks[item['id']]['position']=list(cell_pos(cell_key(item['position'])))
+                if self.familiarity['level']=='limited':self.landmarks[item['id']]['position']=list(cell_pos(cell_key(item['position'])))
                 self.local_ids[item['id']]=f'L{len(self.local_ids)+1}'
         self.initial_knowledge=deepcopy(self.landmarks)
 
@@ -191,7 +225,30 @@ class PersonalSpace:
                     'visible_people':None,'hazard':None,'past_state':None,'state_is_current':False,'age_s':None,
                     'source':'remembered_exploration_goal','observation_ids':self.last_observation_ids[-1:],
                     'novelty':0,'visited':self.visits.get((area,k),0),'path':path(k)})
+        for option in out:
+            option['observed_flow']=self.observed_flow(area,pos,now,option)
         return out
+
+    def observed_flow(self,area,pos,now,option):
+        """Compare a known local path with motion measured by this observer only."""
+        if not self.people_view_active or not self.people_observations:return None
+        view=self.people_observations[-1]
+        if not 0<=now-view['time_s']<=SENSOR['current_observation_ttl_s']:return None
+        heading=next((p for p in option.get('path',[]) if math.dist(pos,p)>.75),option['position'])
+        dx,dy=heading[0]-pos[0],heading[1]-pos[1];distance=math.hypot(dx,dy)
+        if distance<.01:return None
+        alignments=[];observed=0
+        for person in self.last_visible_people:
+            velocity=person.get('observed_velocity_mps')
+            if person.get('area')!=area or velocity is None:continue
+            speed=math.hypot(*velocity)
+            if speed<.1:continue
+            observed+=1;alignment=(velocity[0]*dx+velocity[1]*dy)/(speed*distance)
+            if alignment>.5:alignments.append(alignment)
+        if not observed:return None
+        strength=sum(alignments)/observed*min(1,len(alignments)/3)
+        return {'people':len(alignments),'strength':round(strength,4),'observed_at_s':view['time_s'],
+                'observation_id':view['id'],'source':'own_observed_movement'}
 
     def snapshot(self,area,now):
         landmarks=[]
@@ -219,6 +276,7 @@ class OccludedSensor:
         # original order at every requested time (including rounded-key collisions).
         self._static_ray_covered=lru_cache(maxsize=65536)(self._ray_covered)
         self._static_wall_face=lru_cache(maxsize=65536)(self._wall_face)
+        self._static_landmark_link=lru_cache(maxsize=16384)(self._landmark_link_covered)
         self._observer_point=lru_cache(maxsize=1024)(Point)
         self.boundaries={area:a['geometry'].boundary for area,a in areas.items()}
         self.visibility={};self.config=physical_config or {};self.geometry_by_floor={}
@@ -250,6 +308,15 @@ class OccludedSensor:
 
     def _ray_covered(self,area,floor,p,q):
         return self.vision_geometry(area,floor).covers(LineString([p,q]))
+
+    def _landmark_link_covered(self,area,k,position):
+        return self.areas[area]['geometry'].covers(LineString([cell_pos(k),position]).buffer(.24))
+
+    def landmark_links(self,area,seen,position):
+        """Reuse only static coverage; rebuild from the current seen cells in order."""
+        position=tuple(position)
+        return [k for k in seen if math.dist(cell_pos(k),position)<3.5
+                and self._static_landmark_link(area,k,position)]
 
     def _wall_face(self,area,p,k):
         """Static intersection only; visibility/smoke is checked by the caller."""
@@ -325,17 +392,23 @@ class OccludedSensor:
                     points=self.static_cache[boundary_key]
                     if any(self.visible(area,floor,p,(x.x,x.y),now) for x in points):
                         m['blocked_frontier_edges'].add((k,n));m['edges'].get(k,{}).pop(n,None);m['edges'].get(n,{}).pop(k,None)
-        space.current_origin_links=[k for k in seen if math.dist(p,cell_pos(k))<3.1 and observed_connector(geom,p,cell_pos(k))]
+        connector=observed_connector_checker(geom,p,boundary)
+        space.current_origin_links=[k for k in seen if math.dist(p,cell_pos(k))<3.1 and connector(cell_pos(k))]
         visible_people=[]
         for aid,other in runtime.items():
             if other is r or other.get('floor')!=floor or other['phase'] in {'on_stairs','evacuated'}:continue
             if self.visible(area,floor,p,other['pos'],now):
-                previous=space.people_track.get(aid);estimate=None
-                if previous and 0<now-previous['time_s']<=SENSOR['current_observation_ttl_s']:
-                    estimate=math.dist(previous['position'],other['pos'])/(now-previous['time_s'])
-                space.people_track[aid]={'time_s':now,'position':list(other['pos']),'estimated_speed_mps':estimate}
+                previous=space.people_track.get(aid);estimate=None;velocity=None
+                if (previous and previous.get('floor',floor)==floor and previous.get('area',other['area'])==other['area']
+                    and 0<now-previous['time_s']<=SENSOR['current_observation_ttl_s']):
+                    elapsed=now-previous['time_s']
+                    velocity=[(other['pos'][i]-previous['position'][i])/elapsed for i in (0,1)]
+                    estimate=math.hypot(*velocity)
+                space.people_track[aid]={'time_s':now,'position':list(other['pos']),'estimated_speed_mps':estimate,
+                                        'floor':floor,'area':other['area']}
                 visible_people.append({'id':aid,'position':[round(x,2) for x in other['pos']],
                     'observed_speed_mps':None if estimate is None else round(estimate,2),
+                    'observed_velocity_mps':None if velocity is None else [round(v,3) for v in velocity],
                     'area':other['area'],'observed_at_s':now,'source':'vision',
                     'speed_source':'own_observed_displacement' if estimate is not None else 'not_yet_observed'})
         space.people_observations.append({'id':f'V{len(space.people_observations)+1}','time_s':now,'source':'vision',
@@ -364,11 +437,11 @@ class OccludedSensor:
             oid=space.record(now,'landmark_seen',{'landmark_id':sid,'area':node.get('area'),'floor':floor,'position':position,
                 'observed_same_walkway':node.get('area')==area,'perceived_state':state})
             # Seeing an ascending stair does not reveal its destination floor/exit.
-            kind=(old or {}).get('kind','up_stair')
+            kind=(old or {}).get('kind','fare_gate' if s.get('kind')=='fare_gate' else 'up_stair')
             space.landmarks[sid]={**(old or {}),'id':sid,'area':node.get('area'),'floor':floor,'position':position,'kind':kind,
                 'source':'vision','observed_at_s':now,'current_state':state,'observation_id':oid}
             if node.get('area')==area:
-                links=[k for k in seen if math.dist(cell_pos(k),position)<3.5 and geom.covers(LineString([cell_pos(k),position]).buffer(.24))]
+                links=self.landmark_links(area,seen,position)
                 m['landmark_links'][sid]=links
             if oid:current_ids.append(oid)
             if new_landmark:discovered.append(sid)
