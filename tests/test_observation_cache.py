@@ -1,10 +1,40 @@
 """정적 계산 재사용이 새 연기·지도·판단 입력을 가리지 않는지 검사한다."""
 from types import SimpleNamespace
 
+import pytest
+
 from shapely.geometry import box
 
 from persona_evac.integration.personal_space import OccludedSensor, PersonalSpace
 from persona_evac.integration.private_agents import PrivateController
+
+
+@pytest.mark.parametrize('midpoint,expected',[(2.01,True),(2.04,False)])
+def test_nearby_smoke_samples_cannot_change_visibility_by_warming_order(midpoint,expected):
+    class Fire:
+        def sample(self,floor,pos,now):
+            return {'extinction_per_m':2. if pos[0]>=2.025 else 0.,'temperature_c':20}
+    sensor=OccludedSensor({'room':{'geometry':box(0,0,8,5)}},{},{},Fire())
+    p=(midpoint-1,2.);q=(midpoint+1,2.)
+    assert sensor.visible('room','B2',p,q,0.) is expected
+    sensor.physical('B2',(2.04 if expected else 2.01,2.),1.)
+    assert sensor.visible('room','B2',p,q,1.) is expected
+
+
+def test_physical_sample_cache_keeps_exact_position_floor_and_time():
+    class Fire:
+        def __init__(self):self.calls=[]
+        def sample(self,floor,pos,now):
+            self.calls.append((floor,tuple(pos),now))
+            return {'extinction_per_m':pos[0]+now+(10 if floor=='B1' else 0),'temperature_c':20}
+    fire=Fire();sensor=OccludedSensor({'room':{'geometry':box(0,0,8,5)}},{},{},fire)
+    first=sensor.physical('B2',(2.01,2),0)
+    other=sensor.physical('B2',(2.04,2),0)
+    assert first['extinction_per_m']==2.01 and other['extinction_per_m']==2.04
+    assert sensor.physical('B2',(2.01,2),0)==first
+    assert len(fire.calls)==2
+    assert sensor.physical('B1',(2.01,2),0)['extinction_per_m']==12.01
+    assert sensor.physical('B2',(2.01,2),1)['extinction_per_m']==3.01
 
 
 def test_static_ray_reuse_preserves_smoke_sample_order_and_time_changes():
@@ -74,7 +104,7 @@ def test_navigation_omits_only_unused_snapshot_and_model_context_remains_complet
         return original(*args)
     monkeypatch.setattr(space,'snapshot',snapshot)
     full=controller.observation(r,1)
-    navigation=controller.observation(r,1,(),False,False)
+    navigation=controller.observation(r,1,with_knowledge=False)
     assert len(calls)==1
     assert full['private_knowledge'] is not None and navigation['private_knowledge'] is None
     assert {k:v for k,v in full.items() if k!='private_knowledge'}=={

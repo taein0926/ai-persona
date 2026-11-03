@@ -285,7 +285,7 @@ def main():
     timer.wrap(space.PersonalSpace, "options", "routing")
     timer.wrap(space.PersonalSpace, "shortest", "routing")
     timer.wrap(controller, "resolve_private", "routing")
-    for name in ("plan_overtake", "plan_yield", "plan_cluster_detour"):
+    for name in ("plan_yield", "plan_cluster_detour"):
         timer.wrap(dynamics, name, "routing")
     for name in ("replay", "stair_observations"):
         timer.wrap(FireField, name, "replay_output")

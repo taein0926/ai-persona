@@ -111,7 +111,7 @@ def run(suite, variant, duration):
         (space.PersonalSpace,"options","routing"), (space.PersonalSpace,"shortest","routing"),
         (controller,"resolve_private","routing"), (FireField,"replay","replay_output"),
         (FireField,"stair_observations","replay_output"),
-        (dynamics,"plan_overtake","routing"), (dynamics,"plan_yield","routing"),
+        (dynamics,"plan_yield","routing"),
         (dynamics,"plan_cluster_detour","routing")):
         timer.wrap(owner,name,category)
     progress = {"simulation_time_s":0., "decisions":0}

@@ -15,6 +15,7 @@ from persona_evac.agent_policy import ROOT,POLICY,VERSIONS
 from persona_evac.hashing import canonical_json
 
 SENSOR=POLICY['sensor'];GRID=SENSOR['grid_m']
+FRONTIER_REVISIT_DELAY_S=10.
 PRIOR=json.loads((ROOT/'configs/agents/gaehwasan_prior.json').read_text(encoding='utf-8'))
 PRIOR_HASH=hashlib.sha256(canonical_json(PRIOR).encode()).hexdigest()
 
@@ -61,12 +62,38 @@ def station_stair_memories(nodes, stairs):
     """Only static stair entrances and floor links, without hazards or route maps."""
     result=[]
     for sid,stair in sorted(stairs.items()):
-        if stair.get('kind')=='fare_gate':continue
         origin=nodes[stair['from_node']];destination=nodes[stair['to_node']]
         result.append({'id':sid, 'area':origin.get('area','hall'), 'floor':origin['floor'],
             'position':[origin['x'],origin['y']], 'to_floor':destination['floor'],
-            'to_area':destination.get('area'), 'kind':'exit_stair' if destination['floor']=='OUTSIDE' else 'up_stair'})
+            'to_area':destination.get('area'), 'kind':'fare_gate' if stair.get('kind')=='fare_gate' else 'exit_stair' if destination['floor']=='OUTSIDE' else 'up_stair'})
     return result
+
+
+def station_route_memories(areas,landmarks):
+    """Static structure only; no hazard, crowd, agent or live passage state."""
+    maps={}
+    for area,record in areas.items():
+        geometry=record['geometry'];boundary=geometry.boundary
+        x0,y0,x1,y1=geometry.bounds
+        keys={(x,y) for x in range(math.floor(x0/GRID)-1,math.ceil(x1/GRID)+2)
+              for y in range(math.floor(y0/GRID)-1,math.ceil(y1/GRID)+2)}
+        cells={k for k in keys if geometry.covers(Point(cell_pos(k))) and boundary.distance(Point(cell_pos(k)))>=.22}
+        edges={}
+        for k in sorted(cells):
+            check=observed_connector_checker(geometry,cell_pos(k),boundary)
+            for dx,dy in ((-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)):
+                n=(k[0]+dx,k[1]+dy)
+                if n in cells and check(cell_pos(n)):edges.setdefault(k,{})[n]=math.dist(cell_pos(k),cell_pos(n))
+        links={}
+        for landmark in landmarks:
+            if landmark['area']!=area:continue
+            links[landmark['id']]=[k for k in sorted(cells) if math.dist(cell_pos(k),landmark['position'])<=GRID*1.5
+                and observed_connector_checker(geometry,cell_pos(k),boundary)(landmark['position'])]
+        maps[area]={'cells':cells,'blocked':keys-cells,'blocked_frontier_edges':set(),'edges':edges,'landmark_links':links,
+                    'cell_first_seen':{k:0. for k in sorted(cells)},
+                    'edge_first_seen':{(k,n):0. for k,neighbors in edges.items() for n in neighbors},
+                    'initial_source':'remembered_station_structure'}
+    return maps
 
 def observed_connector(geometry,start,end):
     """Allow recovery from the unchanged engine's soft wall contact, never deepen it.
@@ -94,7 +121,7 @@ def observed_connector_checker(geometry,start,boundary=None):
 class PersonalSpace:
     def __init__(self,persona,mapping=None,prior_landmarks=()):
         self.uuid=persona['uuid'];self.familiarity=familiarity_basis(persona,mapping)
-        self.landmarks={};self.maps={};self.observations=[];self.last_visible_people=[]
+        self.landmarks={};self.maps={};self.prior_maps={};self.observations=[];self.last_visible_people=[]
         self._observation_index={};self._indexed_observations=self.observations;self._indexed_observation_count=0
         self.last_risk={'smoke':'clear','heat':'normal'};self.last_observation_ids=[];self.current_origin_links=[]
         self.last_sense=-1e9;self.revision=0;self.visits={};self.traversals=[]
@@ -103,6 +130,8 @@ class PersonalSpace:
         self.people_observations=[]
         self.visible_landmark_ids=set();self.people_view_active=False
         self._shortest_cache=None
+        self.direct_landmark_links={}
+        self.reached_frontiers={}
         if self.familiarity['level'] in {'limited','familiar'}:
             prior=prior_landmarks if self.familiarity['level']=='familiar' else PRIOR['landmarks']
             for item in prior:
@@ -148,7 +177,11 @@ class PersonalSpace:
             old['connection_observation_id']=oid
         self.traversals.append({'stair_id':sid,'area':area,'floor':floor,'time_s':now,'position':list(pos)})
 
-    def map_for(self,area):return self.maps.setdefault(area,{'cells':set(),'blocked':set(),'blocked_frontier_edges':set(),'edges':{},'landmark_links':{},'cell_first_seen':{},'edge_first_seen':{}})
+    def map_for(self,area):
+        if area not in self.maps:
+            self.maps[area]=deepcopy(self.prior_maps[area]) if area in self.prior_maps else {
+                'cells':set(),'blocked':set(),'blocked_frontier_edges':set(),'edges':{},'landmark_links':{},'cell_first_seen':{},'edge_first_seen':{}}
+        return self.maps[area]
 
     def shortest(self,area,pos):
         m=self.map_for(area);dist={};previous={};heap=[]
@@ -161,6 +194,12 @@ class PersonalSpace:
             for n,length in m['edges'].get(k,{}).items():
                 if d+length<dist.get(n,math.inf):dist[n]=d+length;previous[n]=k;heapq.heappush(heap,(d+length,n))
         return dist,previous
+
+    def mark_frontier_reached(self,area,position,now):
+        """현재 보이는 탐색 공간에 도달한 경험만 개인별로 기록한다."""
+        key=tuple(value/GRID for value in position)
+        self.reached_frontiers[area,key]=now
+        self.visits[area,key]=self.visits.get((area,key),0)+1
 
     def options(self,area,pos,speed,now,current_target=None):
         """Only this private map and its observations are read here."""
@@ -181,9 +220,13 @@ class PersonalSpace:
         for sid,l in sorted(self.landmarks.items()):
             if l['area']!=area:continue
             anchors=[k for k in m['landmark_links'].get(sid,[]) if k in dist]
-            if not anchors:continue  # Historical location alone is not a known traversable route.
-            anchor=min(anchors,key=lambda k:dist[k]+math.dist(cell_pos(k),l['position']))
-            length=dist[anchor]+math.dist(cell_pos(anchor),l['position'])
+            direct=self.direct_landmark_links.get(sid)
+            direct=direct and direct['area']==area and now-direct['time_s']<=SENSOR['current_observation_ttl_s']
+            if not anchors and not direct:continue
+            anchor=min(anchors,key=lambda k:dist[k]+math.dist(cell_pos(k),l['position'])) if anchors else None
+            length=dist[anchor]+math.dist(cell_pos(anchor),l['position']) if anchors else math.inf
+            direct=direct and not anchors
+            if direct:length=math.dist(pos,l['position'])
             age=None if l['observed_at_s'] is None else round(now-l['observed_at_s'],1)
             current=sid in self.visible_landmark_ids and age is not None and age<=SENSOR['current_observation_ttl_s']
             state=l.get('current_state') or {}
@@ -193,14 +236,21 @@ class PersonalSpace:
                 'hazard':state.get('hazard') if current else None,
                 'past_state':None if current else state or None,'state_is_current':current,'age_s':age,
                 'source':l['source'],'observation_ids':[x for x in (l.get('observation_id'),l.get('connection_observation_id')) if x],
-                'path':path(anchor)+[l['position']]})
+                'path':([l['position']] if direct else path(anchor)+[l['position']])})
+        # Use a known, privately reachable stair, exit or fare gate before
+        # searching for an unknown alternative. This also applies to first visitors.
+        if out:
+            for option in out:option['observed_flow']=self.observed_flow(area,pos,now,option)
+            return out
         # Frontiers are boundaries of the observed map, never hidden destination coordinates.
-        frontiers=[]
+        frontiers=[];adaptive=m.get('adaptive',False);step=.25 if adaptive else 1
         known_cells=m['cells']|m['blocked']
         known_targets=[l['position'] for l in self.landmarks.values() if l['area']==area]
         for k,d in dist.items():
-            unseen=sum((k[0]+dx,k[1]+dy) not in known_cells and (k,(k[0]+dx,k[1]+dy)) not in m['blocked_frontier_edges'] for dx,dy in ((1,0),(-1,0),(0,1),(0,-1)))
-            if not unseen or d<2.5:continue
+            if not adaptive and any(value!=round(value) for value in k):continue
+            if now-self.reached_frontiers.get((area,k),-1e9)<FRONTIER_REVISIT_DELAY_S:continue
+            unseen=sum((k[0]+dx*step,k[1]+dy*step) not in known_cells and (k,(k[0]+dx*step,k[1]+dy*step)) not in m['blocked_frontier_edges'] for dx,dy in ((1,0),(-1,0),(0,1),(0,-1)))
+            if not unseen or d<(.2 if adaptive else 2.5):continue
             visited=self.visits.get((area,k),0)
             prior_bearing=min((math.dist(cell_pos(k),p) for p in known_targets),default=0)
             # Locally known novelty and remembered bearing only; no global exit direction.
@@ -208,19 +258,21 @@ class PersonalSpace:
             frontiers.append((score,k,d,unseen,visited))
         selected=[]
         for _,k,d,unseen,visited in sorted(frontiers):
-            if any(math.dist(cell_pos(k),cell_pos(other))<8 for other in selected):continue
+            if any(math.dist(cell_pos(k),cell_pos(other))<(1. if adaptive else 8) for other in selected):continue
             selected.append(k)
             progress=min((math.dist(pos,p) for p in known_targets),default=0)-min((math.dist(cell_pos(k),p) for p in known_targets),default=0)
             out.append({'id':'explore:'+key_string(k),'kind':'frontier','position':list(cell_pos(k)),
+                'arrival_radius_m':.4 if adaptive else 1.,
                 'known_to_floor':None,'distance_m':round(d,2),'walking_s':round(d/max(.1,speed),2),
                 'visible_people':None,'hazard':None,'past_state':None,'state_is_current':False,'age_s':None,
                 'source':'personal_observed_map_frontier','observation_ids':self.last_observation_ids[-1:],
                 'novelty':unseen,'visited':visited,'remembered_bearing_progress_m':round(progress,2),'path':path(k)})
             if len(selected)==2:break
         if current_target and current_target.startswith('explore:') and current_target!='explore:none' and not any(p['id']==current_target for p in out):
-            k=tuple(map(int,current_target.split(':')[1].split(',')))
-            if k in dist:
+            k=tuple(map(float,current_target.split(':')[1].split(',')))
+            if k in dist and now-self.reached_frontiers.get((area,k),-1e9)>=FRONTIER_REVISIT_DELAY_S:
                 out.append({'id':current_target,'kind':'frontier','position':list(cell_pos(k)),
+                    'arrival_radius_m':.4 if adaptive else 1.,
                     'known_to_floor':None,'distance_m':round(dist[k],2),'walking_s':round(dist[k]/max(.1,speed),2),
                     'visible_people':None,'hazard':None,'past_state':None,'state_is_current':False,'age_s':None,
                     'source':'remembered_exploration_goal','observation_ids':self.last_observation_ids[-1:],
@@ -272,8 +324,8 @@ class OccludedSensor:
         self.areas,self.nodes,self.stairs,self.fire=areas,nodes,stairs,fire
         self.signs=signs;self.static_cache={};self.hazard_cache={};self.frame=None
         self.edge_lengths={};self.grid_coverage={}
-        # Only static wall coverage is memoized. Smoke samples still run in the
-        # original order at every requested time (including rounded-key collisions).
+        # Wall predicates are static. Dynamic samples use exact coordinates and
+        # the current frame so one ray cannot replace a nearby ray's FDS sample.
         self._static_ray_covered=lru_cache(maxsize=65536)(self._ray_covered)
         self._static_wall_face=lru_cache(maxsize=65536)(self._wall_face)
         self._static_landmark_link=lru_cache(maxsize=16384)(self._landmark_link_covered)
@@ -333,7 +385,7 @@ class OccludedSensor:
         return None
 
     def physical(self,floor,pos,now):
-        key=(floor,round(pos[0],1),round(pos[1],1))
+        key=(floor,*pos)
         if self.frame!=now:self.hazard_cache={};self.frame=now
         if key not in self.hazard_cache:
             self.hazard_cache[key]=self.fire.sample(floor,pos,now) if self.fire else {'extinction_per_m':0,'temperature_c':20}
@@ -379,7 +431,9 @@ class OccludedSensor:
                     line=LineString([cell_pos(k),cell_pos(n)])
                     self.static_cache[edge_key]=geom.covers(line.buffer(.26))
                     self.edge_lengths[edge_key]=line.length
-                if n in seen and self.static_cache[edge_key]:
+                if (n in seen and self.static_cache[edge_key] and
+                        all(self.visible(area,floor,p,tuple(cell_pos(k)[i]+fraction*(cell_pos(n)[i]-cell_pos(k)[i]) for i in (0,1)),now)
+                            for fraction in (.25,.5,.75))):
                     m['edges'].setdefault(k,{})[n]=self.edge_lengths[edge_key]
                     m['edge_first_seen'].setdefault((k,n),now)
                     m['blocked_frontier_edges'].discard((k,n))
@@ -393,8 +447,39 @@ class OccludedSensor:
                     if any(self.visible(area,floor,p,(x.x,x.y),now) for x in points):
                         m['blocked_frontier_edges'].add((k,n));m['edges'].get(k,{}).pop(n,None);m['edges'].get(n,{}).pop(k,None)
         connector=observed_connector_checker(geom,p,boundary)
-        space.current_origin_links=[k for k in seen if math.dist(p,cell_pos(k))<3.1 and connector(cell_pos(k))]
+        narrow=max((math.dist(p,cell_pos(k)) for k in seen),default=0)<2.5
+        if m.get('adaptive') or space.familiarity['level']=='first_visit':
+            m['adaptive']=m.get('adaptive',False) or narrow;fine_seen=set()
+            cx,cy=round(p[0]*2),round(p[1]*2)
+            for ix in range(cx-5,cx+6):
+                for iy in range(cy-5,cy+6):
+                    k=(ix/4,iy/4);q=cell_pos(k)
+                    if math.dist(p,q)>2.5:continue
+                    visible=self.visible(area,floor,p,q,now)
+                    if visible and boundary.distance(Point(q))>=.22:fine_seen.add(k)
+                    elif visible:m['blocked'].add(k)
+                    else:
+                        intersections=LineString([p,q]).intersection(boundary)
+                        if any(self.visible(area,floor,p,(x.x,x.y),now) for x in getattr(intersections,'geoms',[intersections]) if x.geom_type=='Point'):
+                            m['blocked'].add(k)
+            fine_new=fine_seen-m['cells'];new|=fine_new;m['cells']|=fine_seen
+            for k in fine_new:m['cell_first_seen'][k]=now
+            for k in fine_seen:
+                check=observed_connector_checker(geom,cell_pos(k),boundary)
+                for dx,dy in ((1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1)):
+                    n=(k[0]+dx*.25,k[1]+dy*.25)
+                    midpoint=tuple((cell_pos(k)[i]+cell_pos(n)[i])/2 for i in (0,1))
+                    if n in fine_seen and check(cell_pos(n)) and self.visible(area,floor,p,midpoint,now):
+                        m['edges'].setdefault(k,{})[n]=math.dist(cell_pos(k),cell_pos(n))
+                        m['edge_first_seen'].setdefault((k,n),now)
+            seen|=fine_seen
+        # A loss of sight does not erase a previously observed route. Familiar
+        # people use their static map; first visitors use only their own cells.
+        # Actual movement still checks the visible prefix on every step.
+        origin_candidates=m['cells']
+        space.current_origin_links=[k for k in sorted(origin_candidates) if math.dist(p,cell_pos(k))<3.1 and connector(cell_pos(k))]
         visible_people=[]
+        space.direct_landmark_links={}
         for aid,other in runtime.items():
             if other is r or other.get('floor')!=floor or other['phase'] in {'on_stairs','evacuated'}:continue
             if self.visible(area,floor,p,other['pos'],now):
@@ -443,6 +528,7 @@ class OccludedSensor:
             if node.get('area')==area:
                 links=self.landmark_links(area,seen,position)
                 m['landmark_links'][sid]=links
+                if connector(position):space.direct_landmark_links[sid]={'area':area,'time_s':now}
             if oid:current_ids.append(oid)
             if new_landmark:discovered.append(sid)
         for sign in self.signs:
@@ -452,6 +538,7 @@ class OccludedSensor:
         current_ids.append(space.record(now,'local_hazard',{'area':area,'floor':floor,'position':list(p),'perceived':hazard},'local_sensation'))
         if new:current_ids.append(space.record(now,'space_seen',{'area':area,'floor':floor,'new_cells':len(new)},'vision'))
         space.last_observation_ids=current_ids;space.last_sense=now;space.revision+=bool(new or discovered or hazard!=old_risk)
+        if m.get('adaptive'):center=(round(p[0]*2)/4,round(p[1]*2)/4)
         space.visits[area,center]=space.visits.get((area,center),0)+1
         smoke_order={'clear':0,'light':1,'dense':2,'opaque':3};heat_order={'normal':0,'warm':1,'hot':3}
         smoke_up=smoke_order[hazard['smoke']]>smoke_order[old_risk['smoke']]

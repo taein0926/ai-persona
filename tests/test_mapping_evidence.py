@@ -2,7 +2,7 @@ from copy import deepcopy
 import pytest
 from persona_evac.schemas import PersonaProfile
 from persona_evac.llm.mapping_evidence import validate_mapping_evidence,evidence_schema
-from persona_evac.integration.station_dynamics import can_intentionally_overtake
+from scripts.audit_private_result import historical_intentional_overtake_allowed
 
 
 def payload():
@@ -40,11 +40,11 @@ def test_family_conflict_does_not_substantiate_emergency_response():
 
 @pytest.mark.parametrize('disposition,speed,allowed',[
     ('relaxed',1.8,False),('unknown',1.8,False),('urgent',1.0,False),('urgent',1.8,True)])
-def test_intentional_overtake_requires_evidenced_urgency_and_fast_speed(disposition,speed,allowed):
+def test_historical_overtake_audit_retains_recorded_urgency_and_speed_rules(disposition,speed,allowed):
     a={'mapping':{'overtaking':{'disposition':disposition,'quotes':[{'field':'persona','text':'급한 성격'}]}}}
-    assert can_intentionally_overtake(a,speed,1.2782644) is allowed
+    assert historical_intentional_overtake_allowed(a,speed,1.2782644) is allowed
     a['mapping']['overtaking']['quotes']=[]
-    assert not can_intentionally_overtake(a,1.8,1.2782644)
+    assert not historical_intentional_overtake_allowed(a,1.8,1.2782644)
 
 
 def test_ordinary_fast_sport_is_not_evidence_of_impatience():

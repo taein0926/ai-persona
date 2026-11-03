@@ -1,0 +1,290 @@
+[
+  {
+    "agent_id": 24,
+    "kind": "oscillation",
+    "start_s": 448.5,
+    "end_s": 457.5,
+    "floor": "F1",
+    "position": [
+      122.76363528204038,
+      40.686855698497475
+    ],
+    "area": "ground",
+    "target": "explore:61,21",
+    "goal": [
+      122,
+      42
+    ],
+    "speed": 1.243595
+  },
+  {
+    "agent_id": 44,
+    "kind": "oscillation",
+    "start_s": 283,
+    "end_s": 289.5,
+    "floor": "B2",
+    "position": [
+      75.2116763775496,
+      30.611996640054524
+    ],
+    "area": "A",
+    "target": "explore:37.5,15.5",
+    "goal": [
+      75,
+      31
+    ],
+    "speed": 1.191844
+  },
+  {
+    "agent_id": 44,
+    "kind": "oscillation",
+    "start_s": 517,
+    "end_s": 523,
+    "floor": "B1",
+    "position": [
+      132.75911657763302,
+      13.094501869656902
+    ],
+    "area": "hall",
+    "target": "explore:66.5,6.5",
+    "goal": [
+      133,
+      13
+    ],
+    "speed": 1.191844
+  },
+  {
+    "agent_id": 44,
+    "kind": "oscillation",
+    "start_s": 528,
+    "end_s": 534,
+    "floor": "B1",
+    "position": [
+      132.4259082557956,
+      15.800515330492841
+    ],
+    "area": "hall",
+    "target": "explore:66.25,8.0",
+    "goal": [
+      132.5,
+      16
+    ],
+    "speed": 1.191844
+  },
+  {
+    "agent_id": 57,
+    "kind": "oscillation",
+    "start_s": 250,
+    "end_s": 268.5,
+    "floor": "F1",
+    "position": [
+      122.65508740414869,
+      40.71254399531142
+    ],
+    "area": "ground",
+    "target": "E_1",
+    "goal": [
+      122,
+      42
+    ],
+    "speed": 1.18509
+  },
+  {
+    "agent_id": 58,
+    "kind": "oscillation",
+    "start_s": 386,
+    "end_s": 392.5,
+    "floor": "B2",
+    "position": [
+      73.7283181894275,
+      30.985795394910685
+    ],
+    "area": "A",
+    "target": "explore:36.75,15.5",
+    "goal": [
+      73.5,
+      31
+    ],
+    "speed": 0.955145
+  },
+  {
+    "agent_id": 58,
+    "kind": "oscillation",
+    "start_s": 409,
+    "end_s": 416,
+    "floor": "B2",
+    "position": [
+      79.09310945619079,
+      27.00691611848355
+    ],
+    "area": "A",
+    "target": "explore:39.75,13.5",
+    "goal": [
+      79.5,
+      27
+    ],
+    "speed": 0.955145
+  },
+  {
+    "agent_id": 58,
+    "kind": "oscillation",
+    "start_s": 428,
+    "end_s": 434.5,
+    "floor": "B2",
+    "position": [
+      82.3517955557534,
+      23.364814098418815
+    ],
+    "area": "A",
+    "target": "explore:41.25,11.75",
+    "goal": [
+      82.5,
+      23.5
+    ],
+    "speed": 0.955145
+  },
+  {
+    "agent_id": 58,
+    "kind": "oscillation",
+    "start_s": 452.5,
+    "end_s": 459.5,
+    "floor": "B2",
+    "position": [
+      81.95852162503984,
+      27.97857872046578
+    ],
+    "area": "A",
+    "target": "explore:40.75,14.0",
+    "goal": [
+      81.5,
+      28
+    ],
+    "speed": 0.955145
+  },
+  {
+    "agent_id": 59,
+    "kind": "oscillation",
+    "start_s": 79.5,
+    "end_s": 85,
+    "floor": "B2",
+    "position": [
+      67.98956485899785,
+      25.998847700657514
+    ],
+    "area": "A",
+    "target": "explore:34,13",
+    "goal": [
+      68,
+      26
+    ],
+    "speed": 1.216177
+  },
+  {
+    "agent_id": 76,
+    "kind": "oscillation",
+    "start_s": 15.5,
+    "end_s": 18.5,
+    "floor": "B2",
+    "position": [
+      85.00436406140545,
+      30.333550125552822
+    ],
+    "area": "A",
+    "target": "A_W",
+    "goal": [
+      85.5788,
+      30.043
+    ],
+    "speed": 1.221422
+  },
+  {
+    "agent_id": 76,
+    "kind": "oscillation",
+    "start_s": 151,
+    "end_s": 155,
+    "floor": "F1",
+    "position": [
+      122.7989104765943,
+      40.63824822271329
+    ],
+    "area": "ground",
+    "target": "E_1",
+    "goal": [
+      122,
+      42
+    ],
+    "speed": 1.221422
+  },
+  {
+    "agent_id": 78,
+    "kind": "oscillation",
+    "start_s": 120,
+    "end_s": 123.5,
+    "floor": "F1",
+    "position": [
+      122.62869784949932,
+      40.62703470570173
+    ],
+    "area": "ground",
+    "target": "E_1",
+    "goal": [
+      122,
+      42
+    ],
+    "speed": 1.199164
+  },
+  {
+    "agent_id": 87,
+    "kind": "oscillation",
+    "start_s": 89.5,
+    "end_s": 92.5,
+    "floor": "B1",
+    "position": [
+      116.41918168766395,
+      11.973632298524308
+    ],
+    "area": "hall_paid",
+    "target": "G_12",
+    "goal": [
+      116.58594114298309,
+      12.445992919654664
+    ],
+    "speed": 1.213341
+  },
+  {
+    "agent_id": 100,
+    "kind": "oscillation",
+    "start_s": 364,
+    "end_s": 368,
+    "floor": "B1",
+    "position": [
+      125.3479175162298,
+      19.637979842947438
+    ],
+    "area": "hall",
+    "target": "explore:62.75,9.75",
+    "goal": [
+      125.5,
+      19.5
+    ],
+    "speed": 1.227653
+  },
+  {
+    "agent_id": 100,
+    "kind": "oscillation",
+    "start_s": 536,
+    "end_s": 542,
+    "floor": "B1",
+    "position": [
+      135.96854822231873,
+      26.720071710358884
+    ],
+    "area": "hall",
+    "target": "explore:68.0,13.25",
+    "goal": [
+      136,
+      26.5
+    ],
+    "speed": 1.227653
+  }
+]

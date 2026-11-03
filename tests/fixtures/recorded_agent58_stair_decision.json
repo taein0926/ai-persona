@@ -1,0 +1,275 @@
+{
+  "agent_id": 58,
+  "time_s": 177,
+  "observation": {
+    "agent_id": 58,
+    "time_s": 177,
+    "events": [
+      "critical_risk",
+      "new_route"
+    ],
+    "floor": "B2",
+    "phase": "walking",
+    "profile": {
+      "traits": {
+        "crowd_avoidance": {
+          "level": "low"
+        },
+        "waiting_patience": {
+          "level": "normal"
+        },
+        "risk_avoidance": {
+          "level": "normal"
+        },
+        "exploration": {
+          "level": "low"
+        },
+        "social_following": {
+          "level": "normal"
+        },
+        "overtaking_tendency": {
+          "level": "low"
+        }
+      }
+    },
+    "familiarity": {
+      "level": "first_visit",
+      "assumption": "개화산역에 대한 구체적인 구조적 익숙함에 대한 언급이 없어 초행으로 판단합니다.",
+      "classification_source": "llm",
+      "prior_version": "llm_station_structure_v2",
+      "prior_hash": "f47f0cf4b9aba93993145dea6e3fca454b82f9ed559cb572be44cf80acd6d990",
+      "distance_to_station_m": null,
+      "current_conditions_known": false
+    },
+    "current_target": "explore:42.75,15.25",
+    "memory": [
+      {
+        "id": "M72",
+        "stair_id": "explore:41.25,15.5",
+        "result": "advanced",
+        "waited_s": 0,
+        "stalled_s": 0.1
+      },
+      {
+        "id": "M73",
+        "stair_id": "explore:42.25,14.75",
+        "result": "advanced",
+        "waited_s": 0,
+        "stalled_s": 0.5
+      },
+      {
+        "id": "M74",
+        "stair_id": "explore:42.75,15.25",
+        "result": "little_progress",
+        "waited_s": 0,
+        "stalled_s": 0
+      }
+    ],
+    "observations": [],
+    "options": [
+      {
+        "id": "A_W",
+        "kind": "up_stair",
+        "position": [
+          85.5788,
+          29.1005
+        ],
+        "known_to_floor": null,
+        "distance_m": 1.48,
+        "walking_s": 1.55,
+        "visible_people": 1,
+        "hazard": {
+          "smoke": "opaque",
+          "heat": "hot"
+        },
+        "past_state": null,
+        "state_is_current": true,
+        "age_s": 0,
+        "source": "vision",
+        "observation_ids": [
+          "O332"
+        ],
+        "path": [
+          [
+            85,
+            29.5
+          ],
+          [
+            85.5788,
+            29.1005
+          ]
+        ],
+        "observed_flow": null
+      },
+      {
+        "id": "explore:42.75,15.25",
+        "kind": "frontier",
+        "position": [
+          85.5,
+          30.5
+        ],
+        "arrival_radius_m": 0.12,
+        "known_to_floor": null,
+        "distance_m": 1.29,
+        "walking_s": 1.35,
+        "visible_people": null,
+        "hazard": null,
+        "past_state": null,
+        "state_is_current": false,
+        "age_s": null,
+        "source": "personal_observed_map_frontier",
+        "observation_ids": [
+          "O334"
+        ],
+        "novelty": 2,
+        "visited": 0,
+        "remembered_bearing_progress_m": 0.08,
+        "path": [
+          [
+            85.5,
+            30.5
+          ]
+        ],
+        "observed_flow": null
+      },
+      {
+        "id": "explore:42.75,13.0",
+        "kind": "frontier",
+        "position": [
+          85.5,
+          26
+        ],
+        "arrival_radius_m": 0.12,
+        "known_to_floor": null,
+        "distance_m": 4.18,
+        "walking_s": 4.38,
+        "visible_people": null,
+        "hazard": null,
+        "past_state": null,
+        "state_is_current": false,
+        "age_s": null,
+        "source": "personal_observed_map_frontier",
+        "observation_ids": [
+          "O334"
+        ],
+        "novelty": 2,
+        "visited": 0,
+        "remembered_bearing_progress_m": -1.62,
+        "path": [
+          [
+            85.5,
+            27.5
+          ],
+          [
+            85.5,
+            27
+          ],
+          [
+            85.5,
+            26.5
+          ],
+          [
+            85.5,
+            26
+          ]
+        ],
+        "observed_flow": null
+      }
+    ],
+    "local_hazard": {
+      "smoke": "opaque",
+      "heat": "hot"
+    },
+    "queue_wait_s": 0,
+    "allowed_movements": [
+      "continue",
+      "hurry"
+    ],
+    "private_knowledge": {
+      "version": "personal_space_v1",
+      "revision": 155,
+      "area": "A",
+      "local_ids": {
+        "A_W": "L1"
+      },
+      "known_landmarks": [
+        {
+          "id": "A_W",
+          "area": "A",
+          "floor": "B2",
+          "position": [
+            85.5788,
+            29.1005
+          ],
+          "to_floor": null,
+          "to_area": null,
+          "kind": "up_stair",
+          "source": "vision",
+          "observed_at_s": 177,
+          "current_state": {
+            "people": 1,
+            "hazard": {
+              "smoke": "opaque",
+              "heat": "hot"
+            }
+          },
+          "observation_id": "O332",
+          "state_is_current": true
+        }
+      ],
+      "known_cells": 1533,
+      "visible_people": [
+        {
+          "id": 24,
+          "position": [
+            85,
+            29.29
+          ],
+          "observed_speed_mps": null,
+          "observed_velocity_mps": null,
+          "area": "A",
+          "observed_at_s": 177,
+          "source": "vision",
+          "speed_source": "not_yet_observed"
+        }
+      ],
+      "perceived_hazard": {
+        "smoke": "opaque",
+        "heat": "hot"
+      },
+      "people_view_active": true,
+      "people_observed_at_s": 177,
+      "people_observation_id": "V178",
+      "observation_ids": [
+        "O332",
+        "O333",
+        "O334"
+      ]
+    },
+    "front_observation": {
+      "slower_walker_and_clear_side_observed": false
+    },
+    "own_flat_walked_m": 155.28741207057035,
+    "wait_context_observed": false,
+    "policy_versions": {
+      "profile": "full_persona_traits_v3",
+      "knowledge": "personal_space_v1",
+      "observation": "occluded_perception_v1",
+      "decision": "private_strategy_v2"
+    },
+    "policy_hash": "9c4c60fcf8ad41c3492c007be32056a028ada3f9ceda592485f4b421ae75712b"
+  },
+  "choice": {
+    "priority": "experience",
+    "memory": [
+      "M72",
+      "M73"
+    ],
+    "observations": [
+      "O332",
+      "O334"
+    ],
+    "movement": "continue",
+    "trait_refs": []
+  }
+}

@@ -2,11 +2,19 @@
   "version": "limited_residential_structure_v1",
   "basis": "서울 강서구 거주를 제한된 과거 구조 지식의 대리지표로 사용하는 실험 가정. 거리와 실제 이용 경험은 추정하지 않음.",
   "llm_familiarity": {
-    "version": "llm_station_structure_v1",
-    "landmark_scope": "all_station_stairs",
-    "known_facts": ["position", "floor_connection"],
+    "version": "llm_station_structure_v2",
+    "landmark_scope": "all_station_connectors",
+    "known_facts": ["position", "floor_connection", "fare_gate_connection", "static_walkable_routes"],
     "current_conditions_known": false,
-    "walkable_map_known": false
+    "walkable_map_known": true
+  },
+  "route_selection": {
+    "version": "observed_routes_v5",
+    "adaptive_observed_grid_m": 0.5,
+    "unknown_smoke_reference": "least_smoky_current_connector",
+    "unknown_heat_reference": "current_local_heat",
+    "known_connection_before_exploration": true,
+    "assumption": "미확인 탐색 경로를 연기·열이 없는 경로로 간주하지 않습니다. 현재 통행 경로에서 관측한 최소 연기와 본인 위치의 열감을 탐색 불확실성 비용에 반영합니다. 자신의 관측 지도에서 연결되는 오름계단·출구 계단·개찰구를 발견하면 초행자도 추가 탐색보다 알려진 연결을 우선합니다. 실제 이동에는 현재 시야와 몸체 통과 검사를 유지합니다."
   },
   "landmarks": [
     {"id":"A_W","area":"A","floor":"B2","position":[85.9788,29.1005],"to_floor":"B1","to_area":"hall","kind":"up_stair"},

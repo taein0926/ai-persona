@@ -35,12 +35,12 @@ def test_llm_grade_controls_static_stair_memory_without_current_information(leve
     if level=='first_visit':
         assert space.initial_knowledge=={}
     else:
-        assert set(space.initial_knowledge)=={'S','E'}
+        assert set(space.initial_knowledge)=={'S','E','G'}
         assert space.initial_knowledge['S']['position']==[2,2]
         assert space.initial_knowledge['S']['to_floor']=='B1'
         assert space.initial_knowledge['E']['to_floor']=='OUTSIDE'
         assert all(k['current_state'] is None and k['observed_at_s'] is None for k in space.initial_knowledge.values())
-        # 위치만 기억한다고 아직 보지 않은 보행 지도가 생기지는 않는다.
+        # 구조 지도를 공급하지 않은 단위 구성에서는 경로를 만들지 않는다.
         assert space.options('A',(0,0),1,0)==[]
 
 
@@ -48,7 +48,7 @@ def test_personal_mind_uses_agent_mapping_and_supplied_station_geometry():
     nodes,stairs=structure()
     agent={'persona':{'uuid':'person'},'mapping':mapping('familiar')}
     mind=PrivateMind(agent,build_profile(agent['persona']),station_stair_memories(nodes,stairs))
-    assert set(mind.space.initial_knowledge)=={'S','E'}
+    assert set(mind.space.initial_knowledge)=={'S','E','G'}
 
 
 def test_familiarity_summary_stays_outside_situation_llm_but_grade_and_connections_enter():
@@ -58,6 +58,6 @@ def test_familiarity_summary_stays_outside_situation_llm_but_grade_and_connectio
     observation['private_knowledge']=space.snapshot('A',0)
     projected=project_private(observation)
     assert projected['familiarity']=={'level':'familiar'}
-    assert len(projected['known_connections'])==2
+    assert len(projected['known_connections'])==3
     changed=deepcopy(observation);changed['familiarity']['assumption']='새 요약'
     assert project_private(changed)==projected

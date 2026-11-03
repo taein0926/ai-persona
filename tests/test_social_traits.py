@@ -1,10 +1,11 @@
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
 from persona_evac.persona.full_profile import build_full_profile
 from persona_evac.integration.private_strategy import resolve_private
-from persona_evac.integration.station_dynamics import can_intentionally_overtake
+from persona_evac.integration.private_agents import PrivateController
 from persona_evac.llm.private_decisions import private_schema, project_private, validate_private
 from test_full_profile import estimates
 from test_private_agents import sensor_fixture, default_choice
@@ -51,13 +52,33 @@ def test_follow_strategy_and_level_enter_situation_input_without_profile_summary
         validate_private({'1':{'priority':'follow','movement':'continue','memory':[],'observations':[]}},[o])
 
 
-@pytest.mark.parametrize('level,allowed',[('low',False),('normal',True),('high',True)])
-def test_overtaking_tendency_replaces_old_urgency_mapping(level,allowed):
+@pytest.mark.parametrize('level',['low','normal','high'])
+def test_no_overtaking_option_is_offered_for_any_trait_level(level):
+    _,space,r,_,_=sensor_fixture()
     data=estimates();data['overtaking_tendency']['level']=level
-    agent={'experimental_profile':build_full_profile({'uuid':'passing'},data,1,{'name':'x','digest':'x'}),
-           'mapping':{'overtaking':{'disposition':'relaxed','quotes':[]}}}
-    assert can_intentionally_overtake(agent,1.8,1.3)==allowed
-    assert not can_intentionally_overtake(agent,1.0,1.3)
+    profile=build_full_profile({'uuid':'passing'},data,1,{'name':'x','digest':'x'})
+    controller=PrivateController.__new__(PrivateController)
+    controller.minds={1:SimpleNamespace(space=space,profile=profile,memory=lambda *_:[])}
+    r.update(agent={'agent_id':1,'desired_speed_mps':2.,'distance_walked_m':2.},
+             target='explore:none',wait_streak=0)
+    o=controller.observation(r,1)
+    assert 'overtake' not in o['allowed_movements']
+    assert o['front_observation']=={'slower_walker_and_clear_side_observed':False}
+    assert 'overtake' not in private_schema([o])['properties']['1']['properties']['movement']['enum']
+    with pytest.raises(ValueError,match='허용되지 않은'):
+        validate_private({'1':{'priority':'environment','movement':'overtake','memory':[],'observations':[]}},[o])
+
+
+@pytest.mark.parametrize('level,expected',[('low',18),('normal',8),('high',0)])
+def test_waiting_patience_still_penalizes_current_queue_and_honors_priority(level,expected):
+    o=observation();o['current_target']='near';o['queue_wait_s']=12
+    o['profile']['traits']['waiting_patience']['level']=level
+    choice={'priority':'environment','movement':'continue','memory':[]}
+    _,rows=resolve_private(o,choice)
+    assert rows[0]['own_wait_cost']==expected
+    assert rows[1]['own_wait_cost']==0
+    _,rows=resolve_private(o,{**choice,'priority':'patience'})
+    assert rows[0]['own_wait_cost']==expected*1.5
 
 
 def test_flow_uses_only_current_two_frame_visual_motion():

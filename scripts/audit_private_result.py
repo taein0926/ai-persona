@@ -18,6 +18,12 @@ from persona_evac.llm.ollama import atomic_json
 from persona_evac.station_artifacts import policy_matches
 
 
+def station_fare_gate_ids(scenario):
+    """직렬화된 별도 개찰구 목록과 이전 연결 형식 모두 읽는다."""
+    return ({gate['id'] for gate in scenario.get('fare_gates',[])} |
+            {stair['id'] for stair in scenario.get('stairs',[]) if stair.get('kind')=='fare_gate'})
+
+
 def audit_native_passages(result, config):
     """펼친 JuPedSim 계단·개찰구의 실제 XYZ 기록과 점유를 검사한다."""
     from persona_evac.integration.station_connectors import compile_network
@@ -176,11 +182,13 @@ def audit(path,source_path=Path('output/gaehwasan/persona_source.json')):
             if not p['state_is_current']:assert p['visible_people'] is None and p['hazard'] is None
             cells={tuple(v[:2]):v[2] for v in a['known_map'][o['private_knowledge']['area']]['cell_first_seen']}
             edges={tuple(v[:4]):v[4] for v in a['known_map'][o['private_knowledge']['area']]['edge_first_seen']}
+            detail=.5 if any(any(value!=round(value) for value in k) for k in cells) else POLICY['sensor']['grid_m']
             previous=None
             for xy in p['path']:
-                k=cell_key(xy)
+                snapped=tuple(round(value/detail)*detail for value in xy)
+                k=tuple(value/POLICY['sensor']['grid_m'] for value in snapped)
                 # The terminal stair point can be off-grid; its observed anchor precedes it.
-                if abs(xy[0]-k[0]*POLICY['sensor']['grid_m'])<1e-6 and abs(xy[1]-k[1]*POLICY['sensor']['grid_m'])<1e-6:
+                if all(abs(xy[i]-snapped[i])<1e-6 for i in (0,1)):
                     assert k in cells and cells[k]<=now
                     if previous is not None and k!=previous:
                         assert (*previous,*k) in edges and edges[*previous,*k]<=now
@@ -231,10 +239,9 @@ def audit(path,source_path=Path('output/gaehwasan/persona_source.json')):
                 minimum=min(minimum,gap);pairs+=1
                 if not native:assert gap>=.999,(sid,lane,t,gap)
     diagnostics=r['movement_diagnostics']
-    from persona_evac.integration.station_dynamics import can_intentionally_overtake
-    threshold=r['scenario']['movement']['overtaking_policy']['fast_threshold_mps']
     for plan in diagnostics['overtake_plans']:
-        assert can_intentionally_overtake(agents[plan['agent_id']],plan['desired_speed_mps'],threshold)
+        threshold=r['scenario']['movement']['overtaking_policy']['fast_threshold_mps']
+        assert historical_intentional_overtake_allowed(agents[plan['agent_id']],plan['desired_speed_mps'],threshold)
         assert plan['desired_speed_mps']-plan['front_speed_mps']>=.30-1e-9
         assert plan['front_speed_mps']<=.70*plan['desired_speed_mps']+1e-9
     for passed in diagnostics['overtakes']:
@@ -285,6 +292,18 @@ def audit(path,source_path=Path('output/gaehwasan/persona_source.json')):
     report['interpretation_limit']='동일 상황의 통제 시험 이외의 개인차에는 위치·관측·경험 차이가 포함되므로 성격의 인과 효과를 단정하지 않습니다.'
     atomic_json(path.with_suffix('.audit.json'),report)
     return report
+
+
+def historical_intentional_overtake_allowed(agent,effective_speed,fast_threshold):
+    """과거 저장 결과의 허용 조건 검사용이며 신규 이동에는 사용하지 않는다."""
+    traits=(agent.get('experimental_profile') or {}).get('traits')
+    if traits and 'overtaking_tendency' in traits:
+        return traits['overtaking_tendency']['level'] in {'normal','high'} and effective_speed>fast_threshold
+    if traits:
+        return (traits['waiting_patience']['level']=='low'
+                and traits['exploration']['level'] in {'normal','high'} and effective_speed>fast_threshold)
+    disposition=(agent.get('mapping') or {}).get('overtaking') or {}
+    return disposition.get('disposition')=='urgent' and bool(disposition.get('quotes')) and effective_speed>fast_threshold
 
 
 if __name__=='__main__':

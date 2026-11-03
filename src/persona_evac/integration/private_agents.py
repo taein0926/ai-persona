@@ -12,7 +12,7 @@ from shapely.geometry import Polygon
 from persona_evac.agent_policy import POLICY,VERSIONS,POLICY_HASH
 from persona_evac.persona.experimental_profile import ExperimentalProfiles
 from persona_evac.integration.agent_memory import AgentMemory
-from persona_evac.integration.personal_space import PersonalSpace,OccludedSensor,SENSOR,smoke_label,heat_label,observed_connector_checker,station_stair_memories
+from persona_evac.integration.personal_space import PersonalSpace,OccludedSensor,SENSOR,smoke_label,heat_label,observed_connector_checker,station_stair_memories,station_route_memories
 from persona_evac.integration.private_strategy import resolve_private
 from persona_evac.llm.private_decisions import PrivateDecisions,validate_private
 
@@ -79,13 +79,18 @@ class PrivateMind(AgentMemory):
 
 class VisibleSimulation:
     """Motion helpers can inspect visible bodies only; no intentions are exposed."""
-    def __init__(self,sim,visible_ids):self.sim=sim;self.ids=visible_ids
+    def __init__(self,sim,visible_ids):
+        self.sim=sim;self.ids=visible_ids;self.waypoint_positions={}
+    def add_waypoint_stage(self,position,distance):
+        stage=self.sim.add_waypoint_stage(position,distance)
+        self.waypoint_positions[stage]=tuple(position)
+        return stage
     def agents(self):return [a for a in self.sim.agents() if a.id in self.ids]
     def agent(self,aid):
         if aid not in self.ids:raise ValueError('관측하지 않은 사람을 검사할 수 없습니다.')
         return self.sim.agent(aid)
     def __getattr__(self,key):
-        if key not in {'add_waypoint_stage','add_journey','switch_agent_journey'}:
+        if key not in {'add_journey','switch_agent_journey'}:
             raise AttributeError('국소 이동 검사에는 전체 지도나 다른 사람의 계획을 제공하지 않습니다.')
         return getattr(self.sim,key)
 
@@ -109,11 +114,15 @@ class PrivateController:
         self.profile_inference_calls=sum(record.get('source')=='ollama_live' for record in self.profiles_provider.records)
         prior_landmarks=station_stair_memories(nodes,stairs)
         self.minds={a['agent_id']:PrivateMind(a,self.profiles[a['agent_id']],prior_landmarks) for a in agents}
+        if any(mind.space.familiarity['level']=='familiar' for mind in self.minds.values()):
+            prior_maps=station_route_memories(areas,prior_landmarks)
+            for mind in self.minds.values():
+                if mind.space.familiarity['level']=='familiar':mind.space.prior_maps=prior_maps
         self.sensor=OccludedSensor(areas,nodes,stairs,fire,(physical_config or {}).get('wayfinding_signs',[]),physical_config)
         self.decisions=[];self.navigation_updates=[];self.safety_rejections=[]
         self.local_geom_cache={};self.decision_batches=0
 
-    def observation(self,r,now,events=(),overtaking=False,with_knowledge=True):
+    def observation(self,r,now,events=(),with_knowledge=True):
         aid=r['agent']['agent_id'];mind=self.minds[aid];space=mind.space
         options=space.options(r['area'],r['pos'],r['agent']['desired_speed_mps'],now,r['target'])
         if r['phase']=='on_stairs':options=[]
@@ -126,10 +135,9 @@ class PrivateController:
         observations=list({p['id']:p for p in referenced[-3:]+local+observations[-1:]}.values())[-4:]
         allowed=['continue','hurry']
         queue_wait=max(0,now-r.get('arrived_at',now)) if r['phase']=='queueing' else 0
-        wait_context=(queue_wait>0 or overtaking or sum(p.get('area',r['area'])==r['area'] for p in space.last_visible_people)>=3 and r.get('observed_speed_mps',0)<.25)
+        wait_context=(queue_wait>0 or sum(p.get('area',r['area'])==r['area'] for p in space.last_visible_people)>=3 and r.get('observed_speed_mps',0)<.25)
         wait_allowed=r['agent']['distance_walked_m']>=.5 and wait_context
         if wait_allowed and r['wait_streak']<2 and 'critical_risk' not in events:allowed.append('wait')
-        if overtaking:allowed.append('overtake')
         if r['phase']=='on_stairs':allowed=['continue']
         return {'agent_id':aid,'time_s':now,'events':list(events),'floor':r['floor'],'phase':r['phase'],
                 'profile':mind.profile,'familiarity':space.familiarity,'current_target':r['target'],
@@ -137,7 +145,8 @@ class PrivateController:
                 'local_hazard':space.last_risk,
                 'queue_wait_s':round(max(0,now-r.get('arrived_at',now)),2) if r['phase']=='queueing' else 0,
                 'allowed_movements':allowed,'private_knowledge':space.snapshot(r['area'],now) if with_knowledge else None,
-                'front_observation':{'slower_walker_and_clear_side_observed':overtaking},
+                # Preserve the saved no-overtaking input shape and response cache.
+                'front_observation':{'slower_walker_and_clear_side_observed':False},
                 'own_flat_walked_m':r['agent']['distance_walked_m'],'wait_context_observed':wait_context,
                 'policy_versions':self.policy_versions,'policy_hash':POLICY_HASH}
 
@@ -154,11 +163,22 @@ class PrivateController:
         mind.navigation_updates.append(item);self.navigation_updates.append(item)
 
     def update_navigation(self,r,now,force=False):
+        r.pop('blocked_motion_target',None)
         # Navigation costs read explicit options, memory and observations; only
         # actual model requests need the additional full knowledge snapshot.
-        aid=r['agent']['agent_id'];mind=self.minds[aid];o=self.observation(r,now,(),False,False)
+        aid=r['agent']['agent_id'];mind=self.minds[aid];o=self.observation(r,now,with_knowledge=False)
         options={p['id']:p for p in o['options']};current=options.get(r['target'])
-        reached=current and current['kind']=='frontier' and math.dist(r['pos'],current['position'])<1
+        reached=(current and current['kind']=='frontier'
+                 and math.dist(r['pos'],current['position'])<current.get('arrival_radius_m',1.)
+                 and self.sensor.visible(r['area'],r['floor'],r['pos'],current['position'],now)
+                 and observed_connector_checker(self.areas[r['area']]['geometry'],r['pos'])(current['position']))
+        if reached:
+            mind.space.mark_frontier_reached(r['area'],current['position'],now)
+            mind.space.record(now,'frontier_reached',{'area':r['area'],'floor':r['floor'],
+                'position':list(current['position']),'observer_position':list(r['pos']),
+                'arrival_radius_m':current.get('arrival_radius_m',1.)},'own_navigation')
+            o=self.observation(r,now,with_knowledge=False)
+            options={p['id']:p for p in o['options']};current=options.get(r['target'])
         new_stair=('new_route' in mind.pending and r['target'].startswith('explore:') and
                    len(mind.space.landmarks)>r.get('navigation_known_landmarks',0))
         blocked=now-r.get('stall_since',now)>=6 and now-r.get('local_replan_after',-100)>=10
@@ -172,7 +192,8 @@ class PrivateController:
             if blocked:r['local_replan_after']=now
             current=options.get(r['target'])
         if current is None:
-            r['navigation_blocked']='no_observed_reachable_frontier_or_portal';return
+            r['navigation_blocked']='no_observed_reachable_frontier_or_portal'
+            r['movement_block_reason']='route_unavailable';return
         goal=None;portal=False;lane=None;stage=None;journey=None
         connector=observed_connector_checker(self.areas[r['area']]['geometry'],r['pos'])
         if r['target'] in self.stairs and math.dist(r['pos'],current['position'])<4.5:
@@ -189,18 +210,54 @@ class PrivateController:
             if candidates:
                 _,lane,journey,stage,goal=min(candidates);portal=True
         if goal is None:
+            blocked_by_visibility=False
             for p in current['path']:
                 d=math.dist(r['pos'],p)
-                if d<=.15:continue
+                # A nearby corner is still needed when the following segment
+                # cannot be reached with body clearance from the current position.
+                # Only discard a point coincident with the pedestrian center.
+                if d<=1e-7:continue
+                # A direct observed landmark can be many metres away, without
+                # grid anchors. Limit the next step, not the existence of a route.
+                fraction=min(1.,4.5/d)
+                candidate=tuple(r['pos'][i]+fraction*(p[i]-r['pos'][i]) for i in (0,1))
+                visible=self.sensor.visible(r['area'],r['floor'],r['pos'],candidate,now)
+                if visible and connector(candidate):
+                    goal=candidate
+                else:
+                    blocked_by_visibility=not visible
+                    if visible and goal is None:r['blocked_motion_target']=candidate
+                    # Remembered grid points can be farther apart than the
+                    # current smoke visibility. Walk only a currently visible
+                    # prefix of the known, structurally clear segment.
+                    if not visible and connector(candidate):
+                        low,high=0.,fraction
+                        for _ in range(10):
+                            fraction=(low+high)/2
+                            q=tuple(r['pos'][i]+fraction*(p[i]-r['pos'][i]) for i in (0,1))
+                            if self.sensor.visible(r['area'],r['floor'],r['pos'],q,now):low=fraction
+                            else:high=fraction
+                        # FDS node/sample counts can change at the shortened
+                        # endpoint. Verify the actual final point as well.
+                        for retreat in (.05,0.):
+                            distance=low*d-retreat
+                            if distance<=.1:continue
+                            q=tuple(r['pos'][i]+distance/d*(p[i]-r['pos'][i]) for i in (0,1))
+                            if connector(q) and self.sensor.visible(r['area'],r['floor'],r['pos'],q,now):
+                                goal=q;break
+                    break
                 if d>4.5:break
-                if self.sensor.visible(r['area'],r['floor'],r['pos'],p,now) and connector(p):
-                    goal=tuple(p)
-                else:break
             if goal is None:
-                r['navigation_blocked']='known_path_not_currently_visible';return
+                r['navigation_blocked']='known_path_not_currently_visible'
+                r['movement_block_reason']='visibility' if blocked_by_visibility else 'route_unavailable';return
         r['navigation_blocked']=None
+        r['movement_block_reason']=None
         if r['phase']=='queueing' and r.get('entry_lane')==lane and portal:return
-        if r.get('goal') and math.dist(goal,r['goal'])<.15 and r.get('goal_is_portal')==portal:return
+        if (r.get('goal') and math.dist(goal,r['goal'])<.15 and r.get('goal_is_portal')==portal
+                and math.dist(r['pos'],r['goal'])<=4.5
+                and (math.dist(goal,r['goal'])<1e-7 or math.dist(r['pos'],r['goal'])>.15)
+                and connector(r['goal'])
+                and self.sensor.visible(r['area'],r['floor'],r['pos'],r['goal'],now)):return
         sim=self.areas[r['area']]['sim']
         if stage is None:
             stage=sim.add_waypoint_stage(goal,.08);journey=sim.add_journey(jps.JourneyDescription([stage]))
@@ -266,11 +323,8 @@ class PrivateController:
             if not r.get('passing') and r['phase']!='waiting' and (now>=r.get('navigation_after',0) or math.dist(r['pos'],r['goal'])<.65):
                 self.update_navigation(r,now);r['navigation_after']=now+.5
             if self.mode=='qwen' and abs(now-round(now))<1e-6:
-                preview=self.overtake_probe(r,now) if hasattr(self,'overtake_probe') and r['phase']=='walking' and not r.get('passing') else None
-                r['overtaking_available']=bool(preview)
-                if preview and r.get('action')!='overtake':mind.pending.add('slow_front')
                 events=mind.events_private(r,now)
-                if events:batch.append(self.observation(r,now,events,r.get('overtaking_available',False)))
+                if events:batch.append(self.observation(r,now,events))
         if not batch:return
         self.decision_batches+=1
         outcomes=self.decide_batch(batch)
@@ -301,7 +355,6 @@ class PrivateController:
                 r['pace']=movement;r['action']=action;r['wait_streak']=r['wait_streak']+1 if movement=='wait' else 0
                 if movement=='wait':r.update(phase='waiting',wait_until=now+2)
                 elif r['phase']=='waiting':r['phase']='walking'
-                if movement=='overtake':r['overtake_intent_until']=now+15
                 if r['phase']=='walking':self.update_navigation(r,now)
                 self.decisions.append({**choice,**meta,'time_s':now,'events':o['events'],
                     'event_labels':[EVENT_LABELS[e] for e in o['events']],
@@ -329,11 +382,24 @@ class PrivateController:
         key=(r['agent']['agent_id'],round(now,1),tuple(r['pos']))
         if key not in self.local_geom_cache:
             pts=[]
-            for i in range(48):
-                angle=i*math.tau/48;end=r['pos']
+            angles=[i*math.tau/48 for i in range(48)]
+            if r.get('goal'):
+                angles.append(math.atan2(r['goal'][1]-r['pos'][1],r['goal'][0]-r['pos'][0])%math.tau)
+            for angle in sorted(set(angles)):
+                end=r['pos']
                 for j in range(1,13):
                     q=(r['pos'][0]+.5*j*math.cos(angle),r['pos'][1]+.5*j*math.sin(angle))
-                    if not self.sensor.visible(r['area'],r['floor'],r['pos'],q,now):break
+                    if not self.sensor.visible(r['area'],r['floor'],r['pos'],q,now):
+                        # Resolve the last visible half-metre interval instead
+                        # of throwing it away in short smoke-limited views.
+                        low,high=.5*(j-1),.5*j
+                        for _ in range(6):
+                            distance=(low+high)/2
+                            candidate=(r['pos'][0]+distance*math.cos(angle),r['pos'][1]+distance*math.sin(angle))
+                            if self.sensor.visible(r['area'],r['floor'],r['pos'],candidate,now):low=distance
+                            else:high=distance
+                        end=(r['pos'][0]+low*math.cos(angle),r['pos'][1]+low*math.sin(angle))
+                        break
                     end=q
                 pts.append(end)
             self.local_geom_cache={key:Polygon(pts).buffer(0).intersection(self.areas[r['area']]['geometry'])}
@@ -357,7 +423,8 @@ class PrivateController:
                 personal_knowledge=mind.space.snapshot(r['area'],now),observations=mind.space.observations,
                 people_observations=mind.space.people_observations,
                 known_map_summary={a:{'cells':len(m['cells']),'edges':sum(map(len,m['edges'].values()))} for a,m in mind.space.maps.items()},
-                known_map={a:{'cell_first_seen':[[*k,t] for k,t in m['cell_first_seen'].items()],
+                known_map={a:{'initial_source':m.get('initial_source','observation'),'adaptive_grid_m':.5 if m.get('adaptive') else None,
+                              'cell_first_seen':[[*k,t] for k,t in m['cell_first_seen'].items()],
                               'edge_first_seen':[[*k,*n,t] for (k,n),t in m['edge_first_seen'].items()]}
                            for a,m in mind.space.maps.items()},
                 personal_memory=mind.history+([outcome] if outcome else []),decision_count=mind.count,

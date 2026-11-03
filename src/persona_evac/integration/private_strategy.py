@@ -17,6 +17,12 @@ def resolve_private(observation,choice):
     explore=params['exploration_bonus'][traits['exploration']['level']]
     following_level=traits.get('social_following',{}).get('level','low')
     following=PROFILE_CLASSIFICATION['full_persona']['following_bonus_seconds'][following_level]
+    smoke_cost={'clear':0,'light':3,'dense':15,'opaque':45}
+    heat_cost={'normal':0,'warm':8,'hot':45}
+    observed_smoke=[smoke_cost[p['hazard']['smoke']] for p in observation['options']
+        if p['kind']!='frontier' and p['state_is_current'] and p.get('hazard') and p['hazard'].get('smoke') in smoke_cost]
+    unknown_smoke_reference=min(observed_smoke,default=0)
+    unknown_heat_reference=heat_cost.get((observation.get('local_hazard') or {}).get('heat'),0)
     for option in observation['options']:
         # Missing observations remain unknown; they are never filled from engine state.
         people=option['visible_people'];h=option['hazard'] or {}
@@ -33,6 +39,8 @@ def resolve_private(observation,choice):
         remembered=sum(max(m['waited_s'],m.get('stalled_s',0)) for m in observation['memory'] if m['id'] in choice['memory']
                        and m['stair_id']==option['id'] and m['result']=='still_blocked')
         frontier=option['kind']=='frontier'
+        unknown_smoke_cost=risk*unknown_smoke_reference if frontier else 0
+        unknown_heat_cost=risk*unknown_heat_reference if frontier else 0
         novelty=explore*option.get('novelty',0) if frontier else 0
         revisit=option.get('visited',0)*12 if frontier else 0
         bearing_bonus=max(-18,min(18,option.get('remembered_bearing_progress_m',0))) if frontier else 0
@@ -40,16 +48,18 @@ def resolve_private(observation,choice):
         # Ascending stairs are an observed evacuation affordance, not a known exit.
         upward_bonus=18 if not frontier else 0
         if priority=='crowding':crowd_cost*=1.5
-        if priority=='risk':hazard_cost*=1.5;historical_hazard_cost*=1.5
+        if priority=='risk':hazard_cost*=1.5;historical_hazard_cost*=1.5;unknown_smoke_cost*=1.5;unknown_heat_cost*=1.5
         if priority=='explore':novelty*=1.5
         if priority=='patience':impatience*=1.5
         if priority=='experience':remembered*=1.5
         if priority=='follow':following_bonus*=1.5
         walking_cost=option['walking_s']*(1.5 if priority=='time' else 1)
-        score=walking_cost+crowd_cost+hazard_cost+historical_hazard_cost+uncertainty+impatience+remembered+revisit-novelty-upward_bonus-bearing_bonus-following_bonus
+        score=walking_cost+crowd_cost+hazard_cost+historical_hazard_cost+uncertainty+unknown_smoke_cost+unknown_heat_cost+impatience+remembered+revisit-novelty-upward_bonus-bearing_bonus-following_bonus
         rows.append({'target_id':option['id'],'score':round(score,4),'walking_s':option['walking_s'],
                      'crowd_cost':round(crowd_cost,3),'hazard_cost':round(hazard_cost,3),'uncertainty_cost':uncertainty,
                      'historical_hazard_cost':round(historical_hazard_cost,3),
+                     'unknown_smoke_cost':round(unknown_smoke_cost,3),
+                     'unknown_heat_cost':round(unknown_heat_cost,3),
                      'own_wait_cost':impatience,'memory_cost':remembered,'exploration_bonus':novelty,
                      'revisit_cost':revisit,'upward_affordance_bonus':upward_bonus,
                      'walking_cost':walking_cost,'remembered_bearing_bonus':bearing_bonus,

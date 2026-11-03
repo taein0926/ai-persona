@@ -95,6 +95,7 @@ def test_ready_uses_fresh_position_without_projection(network,monkeypatch):
             'prepared_path':connectors.PreparedPath(path)}
     passage=connectors.NativePassage.__new__(connectors.NativePassage)
     passage.connector=s;passage.branches=[branch]*len(s['native_paths']);passage.occupants={1:(0,11)}
+    passage.incapacitated=set()
     for x in (-1,0,length-.091,length-.09,length-.089,length,length+1):
         for lateral in (spec['offset'],spec['offset']+.09,spec['offset']+.1):
             actor.position=(x,lateral)
@@ -133,6 +134,33 @@ def test_arrival_helpers_reuse_geometry_but_refresh_live_occupancy():
     assert env['reserve_landing']({}, {'area':'hall','x':0,'y':0}) is False
     with pytest.raises(ValueError,match='공간 밖'):
         env['add_person'](r,'hall',(0,0),'target')
+
+
+def test_reserved_landing_handoff_does_not_require_new_insertion_clearance():
+    # 기존 몸체 사이 0.48m는 몸 지름 0.44m보다 넓다. 신규 삽입 여유
+    # 0.52m를 이미 예약한 몸체의 소유권 전환에 다시 적용하면 교착된다.
+    tree=ast.parse(Path(dynamics.__file__).read_text(encoding='utf-8'))
+    simulate=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='simulate')
+    helper=next(n for n in simulate.body if isinstance(n,ast.FunctionDef) and n.name=='add_person')
+    actors=[SimpleNamespace(id=9,position=(2,2)),SimpleNamespace(id=3,position=(2.48,2))]
+    switches=[];added=[]
+    sim=SimpleNamespace(agents=lambda:iter(actors),add_waypoint_stage=lambda *a:1,
+        add_journey=lambda *a:1,add_agent=lambda *a:added.append(a),
+        switch_agent_journey=lambda *a:switches.append(a))
+    env={**vars(dynamics),'areas':{'hall':{'sim':sim,'center_geometry':box(.24,.24,9.76,9.76)}},
+         'native':True,'now':10}
+    exec(compile(ast.Module(body=[helper],type_ignores=[]),'<arrival_helper>','exec'),env)
+    reserved={'agent':{'desired_speed_mps':1},'landing_guard':{'area':'hall','jid':9,'position':(2,2)}}
+    assert env['add_person'](reserved,'hall',(2,2),'target') is True
+    assert reserved['jid']==9 and 'landing_guard' not in reserved
+    assert switches==[(9,1,1)] and added==[]
+    assert [a.position for a in actors]==[(2,2),(2.48,2)]
+    for invalid in ({'area':'other','jid':9,'position':(2,2)},
+                    {'area':'hall','jid':9,'position':(3,2)}):
+        with pytest.raises(ValueError,match='예약한'):
+            env['add_person']({'agent':{'desired_speed_mps':1},'landing_guard':invalid},'hall',(2,2),'target')
+    # 예약 몸체가 없는 신규 진입은 기존의 엄격한 점유 검사를 유지한다.
+    assert env['add_person']({'agent':{'desired_speed_mps':1}},'hall',(2,2),'target') is False
 
 
 def test_fixed_path_preparation_is_not_repeated_during_sampling(monkeypatch):

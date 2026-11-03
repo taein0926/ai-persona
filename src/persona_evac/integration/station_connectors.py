@@ -212,7 +212,10 @@ class NativePassage:
                     before=(b[0]-a[0],b[1]-a[1]);after=(c[0]-b[0],c[1]-b[1])
                     if sum(x*y for x,y in zip(before,after))<math.hypot(*before)*math.hypot(*after)*(1-1e-8):
                         xy=branch['prepared_path'].position(distance,spec['offset'])[:2]
-                        turns.append(branch['sim'].add_waypoint_stage(xy,.15))
+                        # A turn is an area to pass through, not a tiny point
+                        # that competing bodies must both touch. The actual
+                        # corridor walls still constrain every engine step.
+                        turns.append(branch['sim'].add_waypoint_stage(xy,self.radius+.08))
             def journey_to(target):
                 stages=[*turns,target];journey=jps.JourneyDescription(stages)
                 for a,b in zip(stages,stages[1:]):journey.set_transition_for_stage(a,jps.Transition.create_fixed_transition(b))

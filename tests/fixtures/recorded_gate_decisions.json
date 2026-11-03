@@ -1,0 +1,934 @@
+[
+  {
+    "agent_id": 9,
+    "time_s": 130,
+    "choice": {
+      "priority": "experience",
+      "memory": [
+        "M24"
+      ],
+      "observations": [
+        "O231",
+        "O232"
+      ],
+      "movement": "continue",
+      "trait_refs": []
+    },
+    "observation": {
+      "profile": {
+        "traits": {
+          "crowd_avoidance": {
+            "level": "normal"
+          },
+          "waiting_patience": {
+            "level": "high"
+          },
+          "risk_avoidance": {
+            "level": "high"
+          },
+          "exploration": {
+            "level": "low"
+          },
+          "social_following": {
+            "level": "normal"
+          },
+          "overtaking_tendency": {
+            "level": "low"
+          }
+        }
+      },
+      "familiarity": {
+        "level": "familiar"
+      },
+      "time_s": 130,
+      "options": [
+        {
+          "id": "G_07",
+          "kind": "fare_gate",
+          "position": [
+            115.97544114298309,
+            18.957992919654668
+          ],
+          "known_to_floor": null,
+          "distance_m": 5.19,
+          "walking_s": 4.5,
+          "visible_people": 2,
+          "hazard": {
+            "smoke": "dense",
+            "heat": "unknown"
+          },
+          "past_state": null,
+          "state_is_current": true,
+          "age_s": 0.8,
+          "source": "vision",
+          "observation_ids": [
+            "O229"
+          ],
+          "path": [
+            [
+              112.0,
+              18.0
+            ],
+            [
+              114.0,
+              18.0
+            ],
+            [
+              115.97544114298309,
+              18.957992919654668
+            ]
+          ],
+          "observed_flow": {
+            "people": 3,
+            "strength": 0.7933,
+            "observed_at_s": 129.2,
+            "observation_id": "V107",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "G_08",
+          "kind": "fare_gate",
+          "position": [
+            116.09754114298309,
+            17.655592919654666
+          ],
+          "known_to_floor": null,
+          "distance_m": 5.12,
+          "walking_s": 4.44,
+          "visible_people": 3,
+          "hazard": {
+            "smoke": "dense",
+            "heat": "unknown"
+          },
+          "past_state": null,
+          "state_is_current": true,
+          "age_s": 0.8,
+          "source": "vision",
+          "observation_ids": [
+            "O230"
+          ],
+          "path": [
+            [
+              112.0,
+              18.0
+            ],
+            [
+              114.0,
+              18.0
+            ],
+            [
+              116.09754114298309,
+              17.655592919654666
+            ]
+          ],
+          "observed_flow": {
+            "people": 3,
+            "strength": 0.7933,
+            "observed_at_s": 129.2,
+            "observation_id": "V107",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "G_09",
+          "kind": "fare_gate",
+          "position": [
+            116.2196411429831,
+            16.353192919654663
+          ],
+          "known_to_floor": null,
+          "distance_m": 5.76,
+          "walking_s": 5.0,
+          "visible_people": 3,
+          "hazard": {
+            "smoke": "dense",
+            "heat": "unknown"
+          },
+          "past_state": null,
+          "state_is_current": true,
+          "age_s": 0.8,
+          "source": "vision",
+          "observation_ids": [
+            "O231"
+          ],
+          "path": [
+            [
+              112.0,
+              18.0
+            ],
+            [
+              114.0,
+              18.0
+            ],
+            [
+              116.2196411429831,
+              16.353192919654663
+            ]
+          ],
+          "observed_flow": {
+            "people": 3,
+            "strength": 0.7933,
+            "observed_at_s": 129.2,
+            "observation_id": "V107",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "G_10",
+          "kind": "fare_gate",
+          "position": [
+            116.34174114298308,
+            15.050792919654663
+          ],
+          "known_to_floor": null,
+          "distance_m": 6.35,
+          "walking_s": 5.51,
+          "visible_people": 3,
+          "hazard": {
+            "smoke": "dense",
+            "heat": "unknown"
+          },
+          "past_state": null,
+          "state_is_current": true,
+          "age_s": 0.8,
+          "source": "vision",
+          "observation_ids": [
+            "O232"
+          ],
+          "path": [
+            [
+              112.0,
+              18.0
+            ],
+            [
+              114.0,
+              16.0
+            ],
+            [
+              116.34174114298308,
+              15.050792919654663
+            ]
+          ],
+          "observed_flow": {
+            "people": 3,
+            "strength": 0.7933,
+            "observed_at_s": 129.2,
+            "observation_id": "V107",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "explore:57,10",
+          "kind": "frontier",
+          "position": [
+            114.0,
+            20.0
+          ],
+          "known_to_floor": null,
+          "distance_m": 3.82,
+          "walking_s": 3.32,
+          "visible_people": null,
+          "hazard": null,
+          "past_state": null,
+          "state_is_current": false,
+          "age_s": null,
+          "source": "personal_observed_map_frontier",
+          "observation_ids": [
+            "O234"
+          ],
+          "novelty": 2,
+          "visited": 0,
+          "remembered_bearing_progress_m": 2.76,
+          "path": [
+            [
+              112.0,
+              18.0
+            ],
+            [
+              114.0,
+              20.0
+            ]
+          ],
+          "observed_flow": {
+            "people": 3,
+            "strength": 0.7933,
+            "observed_at_s": 129.2,
+            "observation_id": "V107",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "explore:57,6",
+          "kind": "frontier",
+          "position": [
+            114.0,
+            12.0
+          ],
+          "known_to_floor": null,
+          "distance_m": 7.27,
+          "walking_s": 6.31,
+          "visible_people": null,
+          "hazard": null,
+          "past_state": null,
+          "state_is_current": false,
+          "age_s": null,
+          "source": "personal_observed_map_frontier",
+          "observation_ids": [
+            "O234"
+          ],
+          "novelty": 2,
+          "visited": 0,
+          "remembered_bearing_progress_m": 1.14,
+          "path": [
+            [
+              112.0,
+              16.0
+            ],
+            [
+              112.0,
+              14.0
+            ],
+            [
+              114.0,
+              12.0
+            ]
+          ],
+          "observed_flow": {
+            "people": 2,
+            "strength": 0.4089,
+            "observed_at_s": 129.2,
+            "observation_id": "V107",
+            "source": "own_observed_movement"
+          }
+        }
+      ],
+      "local_hazard": {
+        "smoke": "dense",
+        "heat": "normal"
+      },
+      "memory": [
+        {
+          "id": "M22",
+          "time_s": 126.7,
+          "action": "navigate",
+          "stair_id": "explore:57,9",
+          "floor": "B1",
+          "elapsed_s": 2.3,
+          "walked_m": 2.6,
+          "waited_s": 0,
+          "result": "advanced",
+          "selection_source": "navigation_for_last_model_strategy",
+          "stalled_s": 0.5
+        },
+        {
+          "id": "M23",
+          "time_s": 129.0,
+          "action": "reroute",
+          "stair_id": "explore:57,7",
+          "floor": "B1",
+          "elapsed_s": 0.2,
+          "walked_m": 0.2,
+          "waited_s": 0,
+          "result": "little_progress",
+          "selection_source": "model_strategy",
+          "stalled_s": 0.2
+        },
+        {
+          "id": "M24",
+          "time_s": 129.2,
+          "action": "navigate",
+          "stair_id": "explore:57,10",
+          "floor": "B1",
+          "elapsed_s": 0.8,
+          "walked_m": 0.9,
+          "waited_s": 0,
+          "result": "advanced",
+          "selection_source": "navigation_for_last_model_strategy",
+          "stalled_s": 0.5
+        }
+      ],
+      "current_target": "explore:57,10",
+      "queue_wait_s": 0
+    },
+    "previous_target": "explore:57,10"
+  },
+  {
+    "agent_id": 99,
+    "time_s": 127,
+    "choice": {
+      "priority": "experience",
+      "memory": [
+        "M20"
+      ],
+      "observations": [
+        "O220"
+      ],
+      "movement": "continue",
+      "trait_refs": []
+    },
+    "observation": {
+      "profile": {
+        "traits": {
+          "crowd_avoidance": {
+            "level": "normal"
+          },
+          "waiting_patience": {
+            "level": "high"
+          },
+          "risk_avoidance": {
+            "level": "high"
+          },
+          "exploration": {
+            "level": "low"
+          },
+          "social_following": {
+            "level": "normal"
+          },
+          "overtaking_tendency": {
+            "level": "low"
+          }
+        }
+      },
+      "familiarity": {
+        "level": "familiar"
+      },
+      "time_s": 127,
+      "options": [
+        {
+          "id": "G_09",
+          "kind": "fare_gate",
+          "position": [
+            116.2196411429831,
+            16.353192919654663
+          ],
+          "known_to_floor": null,
+          "distance_m": 6.93,
+          "walking_s": 5.96,
+          "visible_people": 0,
+          "hazard": {
+            "smoke": "dense",
+            "heat": "unknown"
+          },
+          "past_state": null,
+          "state_is_current": true,
+          "age_s": 0.3,
+          "source": "vision",
+          "observation_ids": [
+            "O218"
+          ],
+          "path": [
+            [
+              112.0,
+              16.0
+            ],
+            [
+              114.0,
+              16.0
+            ],
+            [
+              116.2196411429831,
+              16.353192919654663
+            ]
+          ],
+          "observed_flow": {
+            "people": 1,
+            "strength": 0.1386,
+            "observed_at_s": 126.65,
+            "observation_id": "V104",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "G_10",
+          "kind": "fare_gate",
+          "position": [
+            116.34174114298308,
+            15.050792919654663
+          ],
+          "known_to_floor": null,
+          "distance_m": 7.21,
+          "walking_s": 6.2,
+          "visible_people": 0,
+          "hazard": {
+            "smoke": "dense",
+            "heat": "unknown"
+          },
+          "past_state": null,
+          "state_is_current": true,
+          "age_s": 0.3,
+          "source": "vision",
+          "observation_ids": [
+            "O219"
+          ],
+          "path": [
+            [
+              112.0,
+              16.0
+            ],
+            [
+              114.0,
+              16.0
+            ],
+            [
+              116.34174114298308,
+              15.050792919654663
+            ]
+          ],
+          "observed_flow": {
+            "people": 1,
+            "strength": 0.1386,
+            "observed_at_s": 126.65,
+            "observation_id": "V104",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "explore:58,8",
+          "kind": "frontier",
+          "position": [
+            116.0,
+            16.0
+          ],
+          "known_to_floor": null,
+          "distance_m": 6.68,
+          "walking_s": 5.75,
+          "visible_people": null,
+          "hazard": null,
+          "past_state": null,
+          "state_is_current": false,
+          "age_s": null,
+          "source": "personal_observed_map_frontier",
+          "observation_ids": [
+            "O221"
+          ],
+          "novelty": 2,
+          "visited": 0,
+          "remembered_bearing_progress_m": 6.41,
+          "path": [
+            [
+              112.0,
+              16.0
+            ],
+            [
+              114.0,
+              16.0
+            ],
+            [
+              116.0,
+              16.0
+            ]
+          ],
+          "observed_flow": {
+            "people": 1,
+            "strength": 0.1386,
+            "observed_at_s": 126.65,
+            "observation_id": "V104",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "explore:56,12",
+          "kind": "frontier",
+          "position": [
+            112.0,
+            24.0
+          ],
+          "known_to_floor": null,
+          "distance_m": 8.3,
+          "walking_s": 7.14,
+          "visible_people": null,
+          "hazard": null,
+          "past_state": null,
+          "state_is_current": false,
+          "age_s": null,
+          "source": "personal_observed_map_frontier",
+          "observation_ids": [
+            "O221"
+          ],
+          "novelty": 2,
+          "visited": 0,
+          "remembered_bearing_progress_m": -1.91,
+          "path": [
+            [
+              110.0,
+              18.0
+            ],
+            [
+              110.0,
+              20.0
+            ],
+            [
+              110.0,
+              22.0
+            ],
+            [
+              112.0,
+              24.0
+            ]
+          ],
+          "observed_flow": {
+            "people": 0,
+            "strength": 0.0,
+            "observed_at_s": 126.65,
+            "observation_id": "V104",
+            "source": "own_observed_movement"
+          }
+        }
+      ],
+      "local_hazard": {
+        "smoke": "dense",
+        "heat": "normal"
+      },
+      "memory": [
+        {
+          "id": "M20",
+          "time_s": 120.0,
+          "action": "continue",
+          "stair_id": "explore:54,8",
+          "floor": "B1",
+          "elapsed_s": 5.7,
+          "walked_m": 6.2,
+          "waited_s": 0,
+          "result": "advanced",
+          "selection_source": "model_strategy",
+          "stalled_s": 0.2
+        },
+        {
+          "id": "M21",
+          "time_s": 125.65,
+          "action": "navigate",
+          "stair_id": "explore:57,9",
+          "floor": "B1",
+          "elapsed_s": 1.0,
+          "walked_m": 1.1,
+          "waited_s": 0,
+          "result": "advanced",
+          "selection_source": "navigation_for_last_model_strategy",
+          "stalled_s": 0.2
+        },
+        {
+          "id": "M22",
+          "time_s": 126.65,
+          "action": "navigate",
+          "stair_id": "explore:58,8",
+          "floor": "B1",
+          "elapsed_s": 0.3,
+          "walked_m": 0.4,
+          "waited_s": 0,
+          "result": "little_progress",
+          "selection_source": "navigation_for_last_model_strategy",
+          "stalled_s": 0.3
+        }
+      ],
+      "current_target": "explore:58,8",
+      "queue_wait_s": 0
+    },
+    "previous_target": "explore:58,8"
+  },
+  {
+    "agent_id": 94,
+    "time_s": 165,
+    "choice": {
+      "priority": "experience",
+      "memory": [
+        "M36"
+      ],
+      "observations": [
+        "O277"
+      ],
+      "movement": "continue",
+      "trait_refs": []
+    },
+    "observation": {
+      "profile": {
+        "traits": {
+          "crowd_avoidance": {
+            "level": "normal"
+          },
+          "waiting_patience": {
+            "level": "high"
+          },
+          "risk_avoidance": {
+            "level": "high"
+          },
+          "exploration": {
+            "level": "low"
+          },
+          "social_following": {
+            "level": "normal"
+          },
+          "overtaking_tendency": {
+            "level": "low"
+          }
+        }
+      },
+      "familiarity": {
+        "level": "familiar"
+      },
+      "time_s": 165,
+      "options": [
+        {
+          "id": "G_11",
+          "kind": "fare_gate",
+          "position": [
+            116.46384114298309,
+            13.748392919654664
+          ],
+          "known_to_floor": null,
+          "distance_m": 4.43,
+          "walking_s": 3.6,
+          "visible_people": 0,
+          "hazard": {
+            "smoke": "dense",
+            "heat": "unknown"
+          },
+          "past_state": null,
+          "state_is_current": true,
+          "age_s": 0.4,
+          "source": "vision",
+          "observation_ids": [
+            "O274"
+          ],
+          "path": [
+            [
+              114.0,
+              12.0
+            ],
+            [
+              116.46384114298309,
+              13.748392919654664
+            ]
+          ],
+          "observed_flow": {
+            "people": 0,
+            "strength": 0.0,
+            "observed_at_s": 164.55,
+            "observation_id": "V142",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "G_12",
+          "kind": "fare_gate",
+          "position": [
+            116.58594114298309,
+            12.445992919654664
+          ],
+          "known_to_floor": null,
+          "distance_m": 4.04,
+          "walking_s": 3.28,
+          "visible_people": 0,
+          "hazard": {
+            "smoke": "dense",
+            "heat": "unknown"
+          },
+          "past_state": null,
+          "state_is_current": true,
+          "age_s": 0.4,
+          "source": "vision",
+          "observation_ids": [
+            "O275"
+          ],
+          "path": [
+            [
+              114.0,
+              12.0
+            ],
+            [
+              116.58594114298309,
+              12.445992919654664
+            ]
+          ],
+          "observed_flow": {
+            "people": 0,
+            "strength": 0.0,
+            "observed_at_s": 164.55,
+            "observation_id": "V142",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "G_13",
+          "kind": "fare_gate",
+          "position": [
+            116.70804114298309,
+            11.143592919654663
+          ],
+          "known_to_floor": null,
+          "distance_m": 4.25,
+          "walking_s": 3.45,
+          "visible_people": 0,
+          "hazard": {
+            "smoke": "dense",
+            "heat": "unknown"
+          },
+          "past_state": null,
+          "state_is_current": true,
+          "age_s": 0.4,
+          "source": "vision",
+          "observation_ids": [
+            "O276"
+          ],
+          "path": [
+            [
+              114.0,
+              12.0
+            ],
+            [
+              116.70804114298309,
+              11.143592919654663
+            ]
+          ],
+          "observed_flow": {
+            "people": 0,
+            "strength": 0.0,
+            "observed_at_s": 164.55,
+            "observation_id": "V142",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "explore:58,7",
+          "kind": "frontier",
+          "position": [
+            116.0,
+            14.0
+          ],
+          "known_to_floor": null,
+          "distance_m": 4.24,
+          "walking_s": 3.44,
+          "visible_people": null,
+          "hazard": null,
+          "past_state": null,
+          "state_is_current": false,
+          "age_s": null,
+          "source": "personal_observed_map_frontier",
+          "observation_ids": [
+            "O278"
+          ],
+          "novelty": 2,
+          "visited": 0,
+          "remembered_bearing_progress_m": 3.5,
+          "path": [
+            [
+              114.0,
+              12.0
+            ],
+            [
+              116.0,
+              14.0
+            ]
+          ],
+          "observed_flow": {
+            "people": 0,
+            "strength": 0.0,
+            "observed_at_s": 164.55,
+            "observation_id": "V142",
+            "source": "own_observed_movement"
+          }
+        },
+        {
+          "id": "explore:55,11",
+          "kind": "frontier",
+          "position": [
+            110.0,
+            22.0
+          ],
+          "known_to_floor": null,
+          "distance_m": 11.0,
+          "walking_s": 8.93,
+          "visible_people": null,
+          "hazard": null,
+          "past_state": null,
+          "state_is_current": false,
+          "age_s": null,
+          "source": "personal_observed_map_frontier",
+          "observation_ids": [
+            "O278"
+          ],
+          "novelty": 1,
+          "visited": 0,
+          "remembered_bearing_progress_m": -6.45,
+          "path": [
+            [
+              112.0,
+              14.0
+            ],
+            [
+              112.0,
+              16.0
+            ],
+            [
+              112.0,
+              18.0
+            ],
+            [
+              112.0,
+              20.0
+            ],
+            [
+              110.0,
+              22.0
+            ]
+          ],
+          "observed_flow": {
+            "people": 0,
+            "strength": 0.0,
+            "observed_at_s": 164.55,
+            "observation_id": "V142",
+            "source": "own_observed_movement"
+          }
+        }
+      ],
+      "local_hazard": {
+        "smoke": "dense",
+        "heat": "warm"
+      },
+      "memory": [
+        {
+          "id": "M34",
+          "time_s": 156.0,
+          "action": "navigate",
+          "stair_id": "explore:56,6",
+          "floor": "B1",
+          "elapsed_s": 7.9,
+          "walked_m": 9.4,
+          "waited_s": 0,
+          "result": "advanced",
+          "selection_source": "navigation_for_last_model_strategy",
+          "stalled_s": 0.4
+        },
+        {
+          "id": "M35",
+          "time_s": 163.95,
+          "action": "navigate",
+          "stair_id": "explore:57,6",
+          "floor": "B1",
+          "elapsed_s": 1.0,
+          "walked_m": 1.2,
+          "waited_s": 0,
+          "result": "advanced",
+          "selection_source": "navigation_for_last_model_strategy",
+          "stalled_s": 0.4
+        },
+        {
+          "id": "M36",
+          "time_s": 164.95,
+          "action": "navigate",
+          "stair_id": "explore:58,7",
+          "floor": "B1",
+          "elapsed_s": 0.1,
+          "walked_m": 0.1,
+          "waited_s": 0,
+          "result": "little_progress",
+          "selection_source": "navigation_for_last_model_strategy",
+          "stalled_s": 0.1
+        }
+      ],
+      "current_target": "explore:58,7",
+      "queue_wait_s": 0
+    },
+    "previous_target": "explore:58,7"
+  }
+]

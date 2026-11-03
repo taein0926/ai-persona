@@ -90,8 +90,27 @@ def append_motion_sample(r,now,pos):
     distances=r['motion_distances']
     if samples:distances.append(math.dist(samples[-1][1],pos))
     samples.append((now,pos))
+    recovery=r.setdefault('recovery_samples',deque(maxlen=61))
+    recovery.append((now,tuple(pos)))
     span=samples[-1][0]-samples[0][0]
     return sum(distances)/span if span>0 else 0
+
+
+def update_stall_state(r,now):
+    """작은 공간의 왕복을 전진으로 취급하지 않는다. 자신의 이동만 읽는다."""
+    samples=r.get('recovery_samples',())
+    oscillating=False
+    if len(samples)>1 and samples[-1][0]-samples[0][0]>=2.5:
+        positions=[p for _,p in samples]
+        walked=sum(math.dist(a,b) for a,b in zip(positions,positions[1:]))
+        extent=max(math.dist(positions[0],p) for p in positions)
+        oscillating=(walked>=.5 and extent<.35
+                     and math.dist(positions[0],positions[-1])<walked*.2)
+    if oscillating:
+        r['stall_since']=min(r['stall_since'],samples[0][0])
+    elif math.dist(r['pos'],r['stall_origin'])>.15:
+        r.update(stall_origin=r['pos'],stall_since=now)
+    return now-r['stall_since']
 
 
 def make_simulation(geometry):
@@ -127,109 +146,67 @@ def pedestrian_geometry(geometry):
     )
 
 
-def can_intentionally_overtake(agent, effective_speed, fast_threshold):
-    traits = (agent.get("experimental_profile") or {}).get("traits")
-    if traits and 'overtaking_tendency' in traits:
-        return traits['overtaking_tendency']['level'] in {'normal','high'} and effective_speed > fast_threshold
-    if traits:
-        return (
-            traits["waiting_patience"]["level"] == "low"
-            and traits["exploration"]["level"] in {"normal", "high"}
-            and (effective_speed > fast_threshold)
-        )
-    disposition = (agent.get("mapping") or {}).get("overtaking") or {}
-    return (
-        disposition.get("disposition") == "urgent"
-        and bool(disposition.get("quotes"))
-        and (effective_speed > fast_threshold)
-    )
 
 
-def plan_overtake(
-    sim,
-    geometry,
-    agent_id,
-    goal,
-    goal_stage,
-    inactive_ids=(),
-    observed_speeds=None,
-    apply=True,
-    intent_speed=None,
-):
-    """Choose clear lateral waypoints; JuPedSim still computes every movement step.
-
-    The waypoint planner breaks the symmetry of exact single-file following. It
-    never moves positions directly and never relaxes body size or collision rules.
-    """
-    actor = sim.agent(agent_id)
-    own_speed = actor.model.desired_speed if intent_speed is None else intent_speed
-    pos = tuple(actor.position)
-    distance = math.dist(pos, goal)
-    if distance < 3:
-        return None
-    direction = ((goal[0] - pos[0]) / distance, (goal[1] - pos[1]) / distance)
-    normal = (-direction[1], direction[0])
-    others = [a for a in sim.agents() if a.id != agent_id and a.id not in inactive_ids]
-    candidates = []
-    for other in others:
-        delta = (other.position[0] - pos[0], other.position[1] - pos[1])
-        ahead = sum((a * b for a, b in zip(delta, direction)))
-        side = abs(sum((a * b for a, b in zip(delta, normal))))
-        front_speed = (observed_speeds or {}).get(other.id, other.model.desired_speed)
-        if (
-            0.8 < ahead < 3.5
-            and side < 0.6
-            and (own_speed - front_speed >= 0.3)
-            and (front_speed <= 0.7 * own_speed)
-        ):
-            candidates.append((ahead, other))
-    if not candidates:
-        return None
-    ahead, front = min(candidates, key=lambda item: item[0])
-    for sign in (1, -1):
-        first = tuple((pos[i] + 0.2 * direction[i] + sign * 0.9 * normal[i] for i in (0, 1)))
-        second = tuple(
-            (pos[i] + (ahead + 2) * direction[i] + sign * 0.9 * normal[i] for i in (0, 1))
-        )
-        path = LineString([pos, first, second])
-        if not geometry.covers(path.buffer(RADIUS + 0.06)):
-            continue
-        if any((path.distance(Point(other.position)) < 2 * RADIUS + 0.08 for other in others)):
-            continue
-        result = {
-            "passed_jps_id": front.id,
-            "waypoints": [first, second],
-            "front_speed_mps": (observed_speeds or {}).get(front.id, front.model.desired_speed),
-            "desired_speed_mps": own_speed,
-            "ahead_m": ahead,
-        }
-        if not apply:
-            return result
-        a = sim.add_waypoint_stage(first, 0.2)
-        b = sim.add_waypoint_stage(second, 0.25)
-        journey = jps.JourneyDescription([a, b, goal_stage])
-        journey.set_transition_for_stage(a, jps.Transition.create_fixed_transition(b))
-        journey.set_transition_for_stage(b, jps.Transition.create_fixed_transition(goal_stage))
-        jid = sim.add_journey(journey)
-        sim.switch_agent_journey(agent_id, jid, a)
-        return result
+def plan_gate_approach_yield(sim,geometry,agent_id,goal,goal_stage,inactive_ids=()):
+    """Resolve a visible, near-mouth merge by walking one body out of the way."""
+    actor=sim.agent(agent_id);pos=tuple(actor.position)
+    if math.dist(pos,goal)>.45:return None
+    others=[a for a in sim.agents() if a.id!=agent_id and a.id not in inactive_ids]
+    competitors=[a for a in others if math.dist(a.position,goal)<=.45 and math.dist(pos,a.position)<2*RADIUS+.14]
+    if not competitors:return None
+    visible=[actor,*others];participants=[actor,*competitors]
+    # Prefer the farther person, but do not order a trapped body to back into
+    # a wall or a third person. Every candidate uses visible positions only.
+    for yielding in sorted(participants,key=lambda a:(-round(math.dist(a.position,goal),3),a.id)):
+        origin=tuple(yielding.position);distance=math.dist(origin,goal)
+        if distance<1e-7:continue
+        blockers=[a for a in visible if a.id!=yielding.id]
+        away=tuple((origin[i]-goal[i])/distance for i in (0,1));first=None
+        for step in (.3,.45,.65,.9):
+            for angle in (0,math.pi/12,-math.pi/12,math.pi/6,-math.pi/6,math.pi/4,-math.pi/4,math.pi/2,-math.pi/2):
+                direction=(away[0]*math.cos(angle)-away[1]*math.sin(angle),away[0]*math.sin(angle)+away[1]*math.cos(angle))
+                if any(math.dist(origin,a.position)<2*RADIUS+.08 and
+                       sum(direction[i]*(origin[i]-a.position[i]) for i in (0,1))<1e-5 for a in blockers):continue
+                candidate=tuple(origin[i]+step*direction[i] for i in (0,1));path=LineString([origin,candidate])
+                if not geometry.covers(path.buffer(RADIUS+.005)):continue
+                if any(path.distance(Point(a.position))<min(2*RADIUS-.004,math.dist(origin,a.position)-.002) for a in blockers):continue
+                if any(math.dist(candidate,a.position)<2*RADIUS+.05 for a in blockers):continue
+                first=candidate;break
+            if first is not None:break
+        if first is None:continue
+        priority=min((a for a in participants if a.id!=yielding.id),key=lambda a:(math.dist(a.position,goal),a.id))
+        decision={'priority_jps_id':priority.id,'yielding_jps_id':yielding.id,'waypoints':[]}
+        if yielding.id!=agent_id:return decision
+        stage=sim.add_waypoint_stage(first,.08);journey=jps.JourneyDescription([stage,goal_stage])
+        journey.set_transition_for_stage(stage,jps.Transition.create_fixed_transition(goal_stage))
+        sim.switch_agent_journey(agent_id,sim.add_journey(journey),stage)
+        decision['waypoints']=[first]
+        return decision
     return None
 
 
-def plan_yield(sim, geometry, agent_id, goal, goal_stage, inactive_ids=()):
+def plan_yield(sim, geometry, agent_id, goal, goal_stage, inactive_ids=(), blocker_ids=None):
     """Break counterflow standstills with clear walking waypoints, never teleport."""
     actor = sim.agent(agent_id)
     pos = tuple(actor.position)
     route = jps.RoutingEngine(geometry).compute_waypoints(pos, goal)
-    target = next((p for p in route if math.dist(pos, p) > 0.2), goal)
+    target = goal if geometry.covers(LineString([pos,goal])) else next((p for p in route if math.dist(pos,p)>.2),goal)
     distance = math.dist(pos, target)
-    if distance < 0.3:
+    if distance < 1e-7:
         return None
     direction = [(target[i] - pos[i]) / distance for i in (0, 1)]
     normal = [-direction[1], direction[0]]
     others = [a for a in sim.agents() if a.id != agent_id and a.id not in inactive_ids]
-    if not any((math.dist(pos, a.position) < 1.5 for a in others)):
+    # 주변 사람 중 실제로 진행 방향을 막는 몸체가 있을 때만 우회한다.
+    blockers=[a for a in others if
+        0 < sum((a.position[i]-pos[i])*direction[i] for i in (0,1)) < min(1.5,distance+RADIUS)
+        and abs(sum((a.position[i]-pos[i])*normal[i] for i in (0,1))) < 2*RADIUS+.12
+    ]
+    if not blockers:
         return None
+    if blocker_ids is not None:
+        blocker_ids.extend(a.id for a in blockers)
     for side in (1, -1):
         for offset in (0.65, 0.45):
             first = tuple((pos[i] + side * offset * normal[i] for i in (0, 1)))
@@ -248,7 +225,125 @@ def plan_yield(sim, geometry, agent_id, goal, goal_stage, inactive_ids=()):
             journey.set_transition_for_stage(b, jps.Transition.create_fixed_transition(goal_stage))
             sim.switch_agent_journey(agent_id, sim.add_journey(journey), a)
             return [first, second]
-    return plan_cluster_detour(sim, geometry, agent_id, goal, goal_stage, inactive_ids)
+    route=plan_cluster_detour(sim, geometry, agent_id, goal, goal_stage, inactive_ids)
+    if route:return route
+    route=plan_contact_detour(sim,geometry,agent_id,goal,goal_stage,others)
+    if route:return route
+    # A short smoke-limited view may not contain an entire overtaking path.
+    # A visible lateral step releases contact; the next observation then
+    # refreshes the local goal before continuing. Never step through a body.
+    for offset in (.45,.3,.65):
+        for side in (1,-1):
+            first=tuple(pos[i]+side*offset*normal[i] for i in (0,1))
+            path=LineString([pos,first])
+            if not geometry.covers(path.buffer(RADIUS+.015)):continue
+            if any(path.distance(Point(a.position))<2*RADIUS-.004 for a in others):continue
+            stage=sim.add_waypoint_stage(first,.08)
+            journey=jps.JourneyDescription([stage,goal_stage])
+            journey.set_transition_for_stage(stage,jps.Transition.create_fixed_transition(goal_stage))
+            sim.switch_agent_journey(agent_id,sim.add_journey(journey),stage)
+            return [first]
+    return None
+
+
+def plan_wall_recovery(sim,geometry,agent_id,goal,goal_stage,inactive_ids=()):
+    """보이는 벽 근처에서 한 걸음 물러난 뒤 원래 목표로 걷는다."""
+    pos=tuple(sim.agent(agent_id).position)
+    wall=geometry.boundary.distance(Point(pos))
+    distance=math.dist(pos,goal)
+    if wall>.65 or distance<.3:return None
+    others=[a for a in sim.agents() if a.id!=agent_id and a.id not in inactive_ids]
+    angle=math.atan2(goal[1]-pos[1],goal[0]-pos[0]);candidates=[]
+    clearance=max(0,min(RADIUS+.015,wall-1e-5))
+    for step in (.4,.65,.9,1.2):
+        for degrees in (0,30,-30,60,-60,90,-90,120,-120,150,-150,180):
+            bearing=angle+math.radians(degrees)
+            first=(pos[0]+step*math.cos(bearing),pos[1]+step*math.sin(bearing))
+            first_wall=geometry.boundary.distance(Point(first))
+            if first_wall<max(RADIUS+.18,wall+.12):continue
+            # The first movement must release wall contact, rather than merely
+            # end farther away after passing through the wall-repulsion zone.
+            previous_wall=wall;outward=True
+            for offset in (.05,.1,.15,.2):
+                fraction=min(step,offset)/step
+                probe=tuple(pos[i]+fraction*(first[i]-pos[i]) for i in (0,1))
+                probe_wall=geometry.boundary.distance(Point(probe))
+                if probe_wall<previous_wall+.002:outward=False;break
+                previous_wall=probe_wall
+            if not outward:continue
+            if not geometry.covers(LineString([pos,first]).buffer(clearance)):continue
+            # The second leg needs room for wall avoidance, beyond body contact.
+            if not geometry.covers(LineString([first,goal]).buffer(RADIUS+.08)):continue
+            path=LineString([pos,first,goal])
+            if any(path.distance(Point(a.position))<2*RADIUS+.015 for a in others):continue
+            candidates.append((path.length+.1/max(.01,first_wall),first))
+    if not candidates:return None
+    _,first=min(candidates)
+    stage=sim.add_waypoint_stage(first,.08)
+    journey=jps.JourneyDescription([stage,goal_stage])
+    journey.set_transition_for_stage(stage,jps.Transition.create_fixed_transition(goal_stage))
+    sim.switch_agent_journey(agent_id,sim.add_journey(journey),stage)
+    return [first]
+
+
+def recover_wall_route(controller,r,now,inactive_ids=()):
+    """벽 접촉으로 일반 경로가 거절된 경우에도 보이는 목표로 복구한다."""
+    goal=r.get('blocked_motion_target') or r['goal']
+    if not controller.sensor.visible(r['area'],r['floor'],r['pos'],goal,now):return None
+    helper,view=controller.visible_helper(r,now)
+    if not view.covers(Point(r['pos'])) or not view.covers(Point(goal)):return None
+    stage=helper.add_waypoint_stage(goal,.08) if r.get('blocked_motion_target') else r['goal_stage']
+    points=plan_wall_recovery(helper,view,r['jid'],goal,stage,inactive_ids)
+    if points and not controller.sensor.visible(r['area'],r['floor'],r['pos'],points[0],now):
+        journey=helper.add_journey(jps.JourneyDescription([r['goal_stage']]))
+        helper.switch_agent_journey(r['jid'],journey,r['goal_stage'])
+        return None
+    if points:
+        r.update(goal=tuple(goal),goal_stage=stage,goal_is_portal=False,navigation_blocked=None,
+                 movement_block_reason=None,passing=True,manoeuvre_waypoints=helper.waypoint_positions)
+        r.pop('blocked_motion_target',None)
+        if 'intended_walk_speed' in r:
+            controller.areas[r['area']]['sim'].agent(r['jid']).model.desired_speed=r['intended_walk_speed']
+    return points
+
+
+def plan_contact_detour(sim,geometry,agent_id,goal,goal_stage,others):
+    """Use physical body clearance when a comfort margin closes a narrow gap."""
+    from shapely.ops import nearest_points
+    pos=tuple(sim.agent(agent_id).position)
+    free=geometry.buffer(-RADIUS-1e-5).difference(unary_union([
+        Point(a.position).buffer(2*RADIUS+.001,quad_segs=16) for a in others]))
+    components=[p for p in getattr(free,'geoms',[free]) if p.geom_type=='Polygon' and p.covers(Point(goal))]
+    for component in components:
+        first=nearest_points(component,Point(pos))[0]
+        first=tuple(first.coords[0])
+        connector=LineString([pos,first])
+        if not geometry.covers(connector.buffer(RADIUS)):continue
+        if any(connector.distance(Point(a.position))<min(2*RADIUS-.004,math.dist(pos,a.position)-.002) for a in others):continue
+        route=[tuple(p) for p in jps.RoutingEngine(component).compute_waypoints(first,goal)]
+        points=[p for p in [first,*route[1:-1]] if math.dist(pos,p)>1e-6]
+        if not points:continue
+        remaining=[*points,tuple(goal)];points=[];origin=pos
+        while remaining:
+            chosen=None
+            for index in range(len(remaining)-1,-1,-1):
+                line=LineString([origin,remaining[index]])
+                if (geometry.covers(line.buffer(RADIUS)) and
+                        all(line.distance(Point(a.position))>=2*RADIUS-.004 for a in others)):
+                    chosen=index;break
+            if chosen is None:break
+            origin=remaining[chosen];points.append(origin);remaining=remaining[chosen+1:]
+        if remaining or not points:continue
+        points=points[:-1]
+        if not points:continue
+        path=LineString([pos,*points,goal])
+        if any(path.distance(Point(a.position))<2*RADIUS-.004 for a in others):continue
+        stages=[sim.add_waypoint_stage(p,.12) for p in points]+[goal_stage]
+        journey=jps.JourneyDescription(stages)
+        for a,b in zip(stages,stages[1:]):journey.set_transition_for_stage(a,jps.Transition.create_fixed_transition(b))
+        sim.switch_agent_journey(agent_id,sim.add_journey(journey),stages[0])
+        return points
+    return None
 
 
 def plan_cluster_detour(sim, geometry, agent_id, goal, goal_stage, inactive_ids=()):
@@ -316,6 +411,106 @@ def plan_cluster_detour(sim, geometry, agent_id, goal, goal_stage, inactive_ids=
     return points
 
 
+def visible_motion_target(sim, runtime, sensor, now):
+    """국소 이동도 매 물리 시간 간격마다 실제 다음 경유점의 시야를 확인한다."""
+    if runtime.get('passing'):
+        actor=sim.agent(runtime['jid'])
+        if actor.stage_id==runtime['goal_stage']:
+            runtime['passing']=False
+            runtime.pop('manoeuvre_waypoints',None)
+            runtime.pop('manoeuvre_progress',None)
+        else:
+            target=runtime.get('manoeuvre_waypoints',{}).get(actor.stage_id)
+            if target is not None and sensor.visible(runtime['area'],runtime['floor'],runtime['pos'],target,now):
+                progress=runtime.get('manoeuvre_progress')
+                remaining=math.dist(runtime['pos'],target)
+                if progress is None or progress['stage_id']!=actor.stage_id:
+                    progress={'stage_id':actor.stage_id,'best_distance':remaining,'last_progress_at':now}
+                    runtime['manoeuvre_progress']=progress
+                elif remaining<progress['best_distance']-.08:
+                    progress.update(best_distance=remaining,last_progress_at=now)
+                if now-progress['last_progress_at']>=2.5:
+                    event=runtime.get('manoeuvre_event')
+                    if event is not None:event['outcome']='stalled_replan'
+                    finish_manoeuvre(runtime,now)
+                    journey=sim.add_journey(jps.JourneyDescription([runtime['goal_stage']]))
+                    sim.switch_agent_journey(runtime['jid'],journey,runtime['goal_stage'])
+                    runtime.update(passing=False,navigation_after=now,yield_after=now,
+                                   stall_since=min(runtime.get('stall_since',now),now-3))
+                    runtime.pop('manoeuvre_waypoints',None);runtime.pop('manoeuvre_progress',None)
+                    if runtime.get('agent') is not None:
+                        runtime['agent'].setdefault('local_recovery_replans',[]).append(
+                            {'time_s':now,'waypoint':list(target),'reason':'no_progress'})
+                    return sensor.visible(runtime['area'],runtime['floor'],runtime['pos'],runtime['goal'],now)
+                return True
+            journey=sim.add_journey(jps.JourneyDescription([runtime['goal_stage']]))
+            sim.switch_agent_journey(runtime['jid'],journey,runtime['goal_stage'])
+            actor.model.desired_speed=0.
+            runtime.update(passing=False,navigation_after=now,
+                           navigation_blocked='local_manoeuvre_not_currently_visible',movement_block_reason='visibility')
+            runtime.pop('manoeuvre_waypoints',None)
+            runtime.pop('manoeuvre_progress',None)
+            return False
+    else:
+        runtime.pop('manoeuvre_waypoints',None)
+        runtime.pop('manoeuvre_progress',None)
+    return sensor.visible(runtime['area'],runtime['floor'],runtime['pos'],runtime['goal'],now)
+
+
+def record_visibility_block(agent,now,blocked):
+    history=agent.setdefault('visibility_blocked_history',[])
+    if not history or history[-1]['blocked']!=blocked:
+        history.append({'time_s':now,'blocked':blocked})
+
+
+def finish_manoeuvre(runtime,now):
+    event=runtime.pop('manoeuvre_event',None)
+    if event is not None:event['end_s']=now
+
+
+def start_manoeuvre(runtime,event,action,now):
+    """이동 계획과 별개로 양보·추월의 실제 실행 구간을 기록한다."""
+    finish_manoeuvre(runtime,now)
+    runtime.pop('manoeuvre_progress',None)
+    event.update(action=action,end_s=None)
+    runtime['manoeuvre_event']=event
+
+
+def update_manoeuvre(runtime,now):
+    if (not runtime.get('passing') or runtime['phase']!='walking'
+            or runtime['agent'].get('incapacitated_at_s') is not None):
+        finish_manoeuvre(runtime,now)
+
+
+def pass_attempt(passer,front,now,source):
+    if (passer['area']!=front['area'] or passer['phase']!='walking' or front['phase']!='walking'
+            or passer['target']!=front['target']):return None
+    distance=math.dist(passer['pos'],passer['goal'])
+    if distance<=.01:return None
+    axis=[(passer['goal'][i]-passer['pos'][i])/distance for i in (0,1)]
+    delta=[front['pos'][i]-passer['pos'][i] for i in (0,1)]
+    if sum(delta[i]*axis[i] for i in (0,1))<=.2:return None
+    return {'passing_agent':passer['agent']['agent_id'],'passed_agent':front['agent']['agent_id'],
+            'start_s':now,'area':passer['area'],'floor':passer['floor'],'target_stair':passer['target'],
+            'axis':axis,'min_surface_gap_m':1000000.,'crossing_lateral_m':None,'source':source}
+
+
+def advance_pass_attempt(event,passer,front,now):
+    if (now-event['start_s']>25 or passer['area']!=event['area'] or front['area']!=event['area']
+            or passer['phase']!='walking' or front['phase']!='walking'
+            or passer['target']!=event['target_stair'] or front['target']!=event['target_stair']):return False
+    delta=[passer['pos'][i]-front['pos'][i] for i in (0,1)]
+    longitudinal=sum(delta[i]*event['axis'][i] for i in (0,1))
+    event['min_surface_gap_m']=min(event['min_surface_gap_m'],math.dist(passer['pos'],front['pos'])-2*RADIUS)
+    if event['crossing_lateral_m'] is None and longitudinal>=0:
+        event['crossing_lateral_m']=abs(delta[0]*event['axis'][1]-delta[1]*event['axis'][0])
+    if longitudinal>=.5:
+        if event['min_surface_gap_m']>=-.01 and (event['crossing_lateral_m'] or 0)>=2*RADIUS:
+            return {**event,'time_s':round(now+DT,8)}
+        return False
+    return None
+
+
 def simulate(source, config, request, decision_provider=None):
     wall_started = time.perf_counter()
     base = initialize_station(source, config, request)
@@ -328,7 +523,7 @@ def simulate(source, config, request, decision_provider=None):
         "engine": "jupedsim",
         "version": jps.__version__,
         "model": "AnticipationVelocityModel",
-        "overtaking": "urgent_fast_clear_lateral_v2",
+        "overtaking": "local_recovery_only_v1",
         "dt_s": DT,
         "seed": SEED,
         "radius_m": RADIUS,
@@ -339,17 +534,10 @@ def simulate(source, config, request, decision_provider=None):
         "wait_duration_s": 2,
     }
     c["movement"]["minimum_navigation_gap_m"] = 2 * (RADIUS + 0.02)
-    fast_threshold = source.get("provenance", {}).get("speed_fast_threshold_mps", 1.3)
     c['movement']['gas_exposure']={'enabled':bool(fire),**GAS_MODEL}
     c["movement"]["overtaking_policy"] = {
-        "fast_threshold_mps": fast_threshold,
-        "threshold_basis": source.get("provenance", {}).get(
-            "speed_fast_threshold_basis", "legacy experimental default"
-        ),
-        "minimum_speed_difference_mps": 0.3,
-        "maximum_front_speed_ratio": 0.7,
-        "disposition_required": "urgent",
-        "front_speed_window_s": 1.0,
+        "intentional_overtaking_enabled": False,
+        "local_recovery_enabled": True,
     }
     c["assumptions"] = [
         s for s in c["assumptions"] if not ("중심선" in s or "최단 예상" in s or "FDS 연기장" in s)
@@ -525,12 +713,6 @@ def simulate(source, config, request, decision_provider=None):
         decision_interval_s=None,
         decision_trigger="private_events",
         policy_versions=private.policy_versions,
-        overtaking="experimental_traits_visible_front_v1",
-    )
-    c["movement"]["overtaking_policy"].update(
-        disposition_required=None,
-        experimental_intent_gate="waiting_patience=low and exploration=normal/high",
-        original_policy="원문 급함 판정은 보존하며 새 실험 성향 정책의 의도 필수 조건에서는 제외",
     )
     c["assumptions"] = [
         s
@@ -553,7 +735,7 @@ def simulate(source, config, request, decision_provider=None):
     if private.profiles_provider.method=='full_persona':
         classification_assumptions[0]='6개 성향은 실험용 가정이며 실제 성격·위기 대응 능력의 측정값이 아닙니다.'
         classification_assumptions[1]='페르소나 전체를 LLM이 해석해 여섯 성향의 등급과 판단 근거만 생성합니다. 후속 상황 판단에는 성향 등급만 전달합니다. 타인 추종성은 본인이 관측한 이동 방향에만 적용합니다.'
-        classification_assumptions[-1]='추월 적극성이 보통·높음이며 목표 보행 속도가 기준보다 빠르면 추월 의도를 허용합니다. 실행은 실제 상대속도·빈 공간·충돌 조건으로 제한합니다.'
+    classification_assumptions[-1]='추월 적극성에 따른 의도적 추월은 사용하지 않습니다. 정체 해소용 국소 우회와 실제 앞지름 집계는 유지합니다.'
     from persona_evac.llm.baseline_profile import POLICY as BASELINE_POLICY
     if any(((a.get('provenance') or {}).get('mapping') or {}).get('policy') == BASELINE_POLICY for a in agents):
         classification_assumptions[5]='역사 친숙도는 LLM이 페르소나 전체 문맥에서 초행·구조에 익숙함으로 분류합니다. 익숙한 사람은 실제 역 모델의 모든 계단 위치·층 연결을 기억하지만 현재 위험·혼잡·통행 상태나 전체 보행 경로는 제공받지 않습니다.'
@@ -565,8 +747,13 @@ def simulate(source, config, request, decision_provider=None):
         reserved=r.get('landing_guard') if native else None
         if not area["center_geometry"].covers(Point(pos)):
             raise ValueError("시작점 또는 계단 도착점이 보행 가능한 공간 밖에 있습니다.")
-        if any((math.dist(pos, a.position) < 2 * RADIUS + 0.08 for a in area["sim"].agents()
-                if not reserved or a.id!=reserved['jid'])):
+        if reserved and (reserved['area']!=area_name or math.dist(pos,reserved['position'])>1e-7):
+            raise ValueError('예약한 계단 도착 몸체의 영역 또는 위치가 일치하지 않습니다.')
+        # 예약 몸체는 수신 엔진 안에 이미 존재한다. 주변 사람이 신규 삽입
+        # 여유(.52m) 안으로 다가와도 몸체 재사용에는 추가 공간이 필요 없다.
+        # 이 검사를 반복하면 예약 몸체와 출구 앞 사람이 서로 막고 멈춘다.
+        if not reserved and any(math.dist(pos, a.position) < 2 * RADIUS + 0.08
+                                for a in area["sim"].agents()):
             return False
         goal = pos
         stage = area["sim"].add_waypoint_stage(pos, 0.2)
@@ -578,6 +765,7 @@ def simulate(source, config, request, decision_provider=None):
             jid = area["sim"].add_agent(parameters(pos, journey, stage, r["agent"]["desired_speed_mps"]))
         r.update(area=area_name, jid=jid, target=target, pos=pos, goal=goal, goal_stage=stage)
         r["motion_samples"] = deque([(now, pos)], maxlen=21)
+        r['recovery_samples'] = deque([(now,tuple(pos))],maxlen=61)
         r["motion_distances"] = deque(maxlen=20)
         r["observed_speed_mps"] = 0
         r["entry_lane"] = None
@@ -598,6 +786,7 @@ def simulate(source, config, request, decision_provider=None):
         a.update(segments=[], stair_wait_s=0.0, evacuation_time_s=None, exit_id=None)
         a.update(fed=0.,gas_exposure_until_s=0.,incapacitated_at_s=None,
                  gas_exposure_history=[{'time_s':0.,'fed':0.}] if fire else [])
+        a['visibility_blocked_history']=[{'time_s':0.,'blocked':False}]
         a.update(distance_walked_m=0.0, decision_wait_s=0.0)
         a["experimental_profile"] = minds[a["agent_id"]].profile
         area = a["spawn"].get("area", "A" if i % 2 == 0 else "B")
@@ -619,7 +808,6 @@ def simulate(source, config, request, decision_provider=None):
             stall_since=0,
             yield_after=0,
             lane_change_after=0,
-            overtake_intent_until=-1,
             pace="continue",
         )
         initial = "explore:none"
@@ -627,33 +815,6 @@ def simulate(source, config, request, decision_provider=None):
             raise ValueError("시작 위치에서 사람이 겹칩니다. 서로 다른 시작 위치가 필요합니다.")
         runtime[a["agent_id"]] = r
 
-    def private_overtake_probe(r, now):
-        intent_speed = min(
-            2.2, r["agent"]["desired_speed_mps"] * (1.35 if r.get("pace") == "hurry" else 1)
-        )
-        if not can_intentionally_overtake(r["agent"], intent_speed, fast_threshold):
-            return None
-        sim, geom = private.visible_helper(r, now)
-        mind = private.minds[r["agent"]["agent_id"]]
-        speeds = {
-            o["jid"]: mind.space.people_track.get(aid, {}).get("estimated_speed_mps")
-            if mind.space.people_track.get(aid, {}).get("estimated_speed_mps") is not None
-            else math.inf
-            for aid, o in runtime.items()
-            if o["area"] == r["area"]
-        }
-        return plan_overtake(
-            sim,
-            geom,
-            r["jid"],
-            r["goal"],
-            r["goal_stage"],
-            observed_speeds=speeds,
-            apply=False,
-            intent_speed=intent_speed,
-        )
-
-    private.overtake_probe = private_overtake_probe
 
     def location(r):
         if r["phase"] == "on_stairs":
@@ -901,16 +1062,15 @@ def simulate(source, config, request, decision_provider=None):
                     )
             if r["phase"] != "walking":
                 speed = 0
-            if r["phase"] == "walking" and (
-                r.get("navigation_blocked")
-                or (
-                    not r.get("passing")
-                    and (
-                        not private.sensor.visible(r["area"], r["floor"], r["pos"], r["goal"], now)
-                    )
-                )
-            ):
-                speed = 0
+            r['intended_walk_speed']=speed
+            visibility_blocked=False
+            if r["phase"] == "walking":
+                target_visible=visible_motion_target(areas[r['area']]['sim'],r,private.sensor,now)
+                visibility_blocked=not target_visible or (
+                    bool(r.get('navigation_blocked')) and r.get('movement_block_reason')=='visibility')
+                if r.get('navigation_blocked') or not target_visible:
+                    speed=0
+            record_visibility_block(r['agent'],now,visibility_blocked)
             actor.model.desired_speed = speed
         if tick % 10 == 0:
             for aid in before:
@@ -919,104 +1079,59 @@ def simulate(source, config, request, decision_provider=None):
                     continue
                 area = areas[r["area"]]
                 goal_stage = r["goal_stage"]
-                if r["passing"] and area["sim"].agent(r["jid"]).stage_id == goal_stage:
-                    r["passing"] = False
-                if math.dist(r["pos"], r["stall_origin"]) > 0.15:
-                    r.update(stall_origin=r["pos"], stall_since=now)
-                recovery_busy = False
-                if not recovery_busy and now - r["stall_since"] > 2.5 and (now >= r["yield_after"]):
+                update_stall_state(r,now)
+                movement_allowed=area['sim'].agent(r['jid']).model.desired_speed>0 and not r.get('navigation_blocked')
+                wall_retry=(r.get('movement_block_reason')=='route_unavailable' and bool(r.get('blocked_motion_target')))
+                if not r['passing'] and (movement_allowed or wall_retry) and now-r['stall_since']>2.5 and now>=r['yield_after']:
                     helper_sim, helper_geom = private.visible_helper(r, now)
                     points = None
-                    if helper_geom.covers(Point(r["pos"])) and helper_geom.covers(Point(r["goal"])):
+                    blocker_ids=[]
+                    gate_merge=None
+                    wall_recovery=False
+                    if movement_allowed and helper_geom.covers(Point(r["pos"])) and helper_geom.covers(Point(r["goal"])):
                         try:
-                            points = plan_yield(
-                                helper_sim,
-                                helper_geom,
-                                r["jid"],
-                                r["goal"],
-                                goal_stage,
-                                {
-                                    o["jid"]
-                                    for o in runtime.values()
-                                    if o["area"] == r["area"]
-                                    and o["phase"] in {"on_stairs", "evacuated"}
-                                },
-                            )
+                            inactive={o['jid'] for o in runtime.values() if o['area']==r['area'] and o['phase'] in {'on_stairs','evacuated'}}
+                            if r.get('goal_is_portal') and stairs.get(r['target'],{}).get('kind')=='fare_gate':
+                                gate_merge=plan_gate_approach_yield(helper_sim,helper_geom,r['jid'],r['goal'],goal_stage,inactive)
+                            if gate_merge is not None:
+                                points=gate_merge['waypoints']
+                            else:
+                                points = plan_yield(helper_sim,helper_geom,r['jid'],r['goal'],goal_stage,
+                                                    inactive,blocker_ids=blocker_ids)
                         except RuntimeError:
                             pass
+                    if not points and (wall_retry or not r.get('goal_is_portal')):
+                        inactive={o['jid'] for o in runtime.values() if o['area']==r['area'] and o['phase'] in {'on_stairs','evacuated'}}
+                        points=recover_wall_route(private,r,now,inactive)
+                        wall_recovery=bool(points)
                     if points:
                         r.update(
                             passing=True,
+                            manoeuvre_waypoints=(r['manoeuvre_waypoints'] if wall_recovery else helper_sim.waypoint_positions),
                             yield_after=now + 4,
                             stall_origin=r["pos"],
                             stall_since=now,
                         )
-                        yield_plans.append(
-                            {
-                                "agent_id": aid,
-                                "time_s": now,
-                                "floor": r["floor"],
-                                "waypoints": points,
-                                "observation_id": r.get("local_motion_observation_id"),
-                            }
-                        )
-                if (
-                    not r["passing"]
-                    and now <= r["overtake_intent_until"]
-                    and can_intentionally_overtake(
-                        r["agent"], area["sim"].agent(r["jid"]).model.desired_speed, fast_threshold
-                    )
-                ):
-                    helper_sim, helper_geom = private.visible_helper(r, now)
-                    observed = {
-                        o["jid"]: o["observed_speed_mps"]
-                        for o in runtime.values()
-                        if o["area"] == r["area"]
-                        and o["phase"] not in {"on_stairs", "evacuated"}
-                        and (len(o["motion_samples"]) >= 11)
-                    }
-                    plan = plan_overtake(
-                        helper_sim,
-                        helper_geom,
-                        r["jid"],
-                        r["goal"],
-                        goal_stage,
-                        {
-                            o["jid"]
-                            for o in runtime.values()
-                            if o["area"] == r["area"] and o["phase"] in {"on_stairs", "evacuated"}
-                        },
-                        observed,
-                    )
-                    if plan:
-                        r["passing"] = True
-                        pass_plans.append(
-                            {"agent_id": aid, "time_s": now, "floor": r["floor"], **plan}
-                        )
-                        front_id = next(
-                            (
-                                oid
-                                for oid, o in runtime.items()
-                                if o["area"] == r["area"]
-                                and o["phase"] not in {"on_stairs", "evacuated"}
-                                and (o["jid"] == plan["passed_jps_id"])
-                            )
-                        )
-                        goal = r["goal"]
-                        distance = math.dist(r["pos"], goal)
-                        pending_passes.append(
-                            {
-                                "passing_agent": aid,
-                                "passed_agent": front_id,
-                                "start_s": now,
-                                "area": r["area"],
-                                "floor": r["floor"],
-                                "target_stair": r["target"],
-                                "axis": [(goal[i] - r["pos"][i]) / distance for i in (0, 1)],
-                                "min_surface_gap_m": 1000000.0,
-                                "crossing_lateral_m": None,
-                            }
-                        )
+                        event={
+                            "agent_id": aid,
+                            "time_s": now,
+                            "floor": r["floor"],
+                            "waypoints": points,
+                            "observation_id": r.get("local_motion_observation_id"),
+                            "cause": ("visible_gate_approach_yield" if gate_merge else
+                                      "visible_wall_recovery" if wall_recovery else "visible_person_blocking_path"),
+                            **({'priority_jps_id':gate_merge['priority_jps_id']} if gate_merge else {}),
+                        }
+                        yield_plans.append(event)
+                        start_manoeuvre(r,event,'yielding' if gate_merge else
+                                        'route_recovery' if wall_recovery else 'overtaking',now)
+                        for other in runtime.values():
+                            if other['area']!=r['area'] or other['jid'] not in blocker_ids:continue
+                            attempt=pass_attempt(r,other,now,'local_recovery')
+                            if attempt and not any(e['passing_agent']==attempt['passing_agent'] and e['passed_agent']==attempt['passed_agent'] for e in pending_passes):
+                                pending_passes.append(attempt)
+        for r in runtime.values():
+            update_manoeuvre(r,now)
         for area in areas.values():
             area["sim"].iterate()
         for aid, old in before.items():
@@ -1060,32 +1175,10 @@ def simulate(source, config, request, decision_provider=None):
                         areas[r['area']]['sim'].agent(r['jid']).model.desired_speed=0.
         for event in pending_passes[:]:
             a, b = (runtime[event["passing_agent"]], runtime[event["passed_agent"]])
-            if (
-                now - event["start_s"] > 25
-                or a["area"] != event["area"]
-                or b["area"] != event["area"]
-                or (a["phase"] != "walking")
-                or (b["phase"] != "walking")
-                or (a["target"] != event["target_stair"])
-                or (b["target"] != event["target_stair"])
-            ):
-                pending_passes.remove(event)
-                continue
-            delta = [a["pos"][i] - b["pos"][i] for i in (0, 1)]
-            longitudinal = sum((delta[i] * event["axis"][i] for i in (0, 1)))
-            gap = math.dist(a["pos"], b["pos"]) - 2 * RADIUS
-            event["min_surface_gap_m"] = min(event["min_surface_gap_m"], gap)
-            if event["crossing_lateral_m"] is None and longitudinal >= 0:
-                event["crossing_lateral_m"] = abs(
-                    delta[0] * event["axis"][1] - delta[1] * event["axis"][0]
-                )
-            if longitudinal >= 0.5:
-                if (
-                    event["min_surface_gap_m"] >= -0.01
-                    and (event["crossing_lateral_m"] or 0) >= 2 * RADIUS
-                ):
-                    overtakes.append({**event, "time_s": round(now + DT, 8)})
-                pending_passes.remove(event)
+            result=advance_pass_attempt(event,a,b,now)
+            if result is None:continue
+            if result:overtakes.append(result)
+            pending_passes.remove(event)
         min_gap,overlap_steps=diagnose_people(runtime,before,areas,now,min_gap,overlap_steps,pair_history,rank_changes)
     else:
         now = max_time
@@ -1105,6 +1198,8 @@ def simulate(source, config, request, decision_provider=None):
                     stair_motion=r["passage"]["motion"], stair_lane=r["stair_lane"]
                 )
                 if native:r['agent']['segments'][-1]['native_motion']=r['passage']['native_motion']
+    for r in runtime.values():
+        finish_manoeuvre(r,now)
     unique_passes = {}
     for event in overtakes:
         key = (event["passing_agent"], event["passed_agent"], event["area"], event["target_stair"])
@@ -1169,7 +1264,7 @@ def simulate(source, config, request, decision_provider=None):
         behavior={
             "mode": request.behavior_mode,
             "model": getattr(decision_provider, "model", None),
-            "policy": PRIVATE_POLICY if private.profiles_provider.method=='keyword_candidates' else {
+            "policy": {
                 **PRIVATE_POLICY, 'versions':private.policy_versions, 'assumptions':classification_assumptions},
             "event_counts": dict(Counter((e for d in decisions for e in d.get("events", [])))),
             "profile_timings": private.profiles_provider.records,
@@ -1191,7 +1286,7 @@ def simulate(source, config, request, decision_provider=None):
             "overtakes": overtakes,
             "overtake_plans": pass_plans,
             "distance_rank_changes": rank_changes,
-            "overtake_definition": "추월 계획의 동일 앞사람을 고정 진행축에서 실제로 지나 0.5m 앞에 도달, 교차 시 측면 거리≥0.44m·몸 겹침 없음. 동일 층·목표·방향의 인물 쌍은 1회 집계",
+            "overtake_definition": "국소 우회의 동일 앞사람을 고정 진행축에서 실제로 지나 0.5m 앞에 도달, 교차 시 측면 거리≥0.44m·몸 겹침 없음. 동일 층·목표·방향의 인물 쌍은 1회 집계",
         },
         summary={
             "count": len(agents),
@@ -1234,7 +1329,7 @@ def simulate(source, config, request, decision_provider=None):
     base["replay_duration_s"] = base["fire"]["frames"][-1]["time_s"] if fire else now
     if not base['summary']['all_evacuated']:
         base['replay_duration_s']=min(base['replay_duration_s'],now)
-    from persona_evac.integration.personal_space import PRIOR_HASH
+    from persona_evac.integration.personal_space import PRIOR_HASH,PRIOR
 
     base["agent_policy"] = {
         "versions": {**VERSIONS, "profile": private.profiles_provider.version},
@@ -1244,6 +1339,7 @@ def simulate(source, config, request, decision_provider=None):
         "profile_policy_hash": next(iter(private.profiles.values()))['policy_hash'],
         "experiment_seed": request.experiment_seed,
         "prior_hash": PRIOR_HASH,
+        "navigation_policy": PRIOR['route_selection'],
         "observation_policy": PRIVATE_POLICY["sensor"],
         "assumptions": classification_assumptions,
     }

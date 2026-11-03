@@ -113,7 +113,7 @@ def test_entrance_uses_observed_free_side_without_reading_hidden_landing_lanes()
         controller.minds={1:mind};controller.sensor=SimpleNamespace(visible=lambda *args:True)
         controller.areas={'hall':{'sim':Sim(),'geometry':geom,'lanes':{'S':[(10,20,(5,1)),(11,21,(5,4))]}}}
         controller.stairs={'S':{'entry_lane_numbers':[0,1],'physical_valid_lanes':hidden_valid_lanes}}
-        controller.observation=lambda *args:{'options':[{'id':'S','kind':'up_stair','position':[5,2],'path':[]}]}
+        controller.observation=lambda *args,**kwargs:{'options':[{'id':'S','kind':'up_stair','position':[5,2],'path':[]}]}
         r={'agent':{'agent_id':1,'desired_speed_mps':1},'area':'hall','floor':'B1','target':'S','pos':(2,2),
            'phase':'walking','stall_since':0,'goal':(5,1),'goal_is_portal':True,'entry_lane':0,'jid':1}
         controller.update_navigation(r,1)
