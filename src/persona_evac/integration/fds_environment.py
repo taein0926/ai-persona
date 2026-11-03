@@ -13,6 +13,44 @@ import numpy as np
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[3]
 ROOT = PACKAGE_ROOT if (PACKAGE_ROOT / "configs/scenarios/station_view.json").exists() else Path.cwd()
+GAS_SPECIES = {'co':'CARBON MONOXIDE','co2':'CARBON DIOXIDE','o2':'OXYGEN'}
+
+
+def cache_obstruction_masks(sim):
+    """높이·가스마다 반복하는 동일 메시·시각의 장애물 검사를 재사용한다."""
+    for mesh in sim.meshes:
+        original=mesh.get_obstruction_mask
+        cache={}
+        def cached(times,cell_centered=False,_original=original,_cache=cache):
+            values=np.asarray(times)
+            key=(values.dtype.str,tuple(values),cell_centered)
+            if key not in _cache:
+                result=_original(times,cell_centered=cell_centered)
+                result.flags.writeable=False
+                _cache[key]=result
+            return _cache[key]
+        mesh.get_obstruction_mask=cached
+
+
+def _gas_slice(sim, species, height, settings, times, xs, ys):
+    quantity = species+' VOLUME FRACTION'
+    matches = [s for s in sim.slices if s.quantity.name.upper() == quantity
+               and s.orientation == 3 and abs(s.extent.z_start-height) <= settings.get('mesh_cell_m',.5)/2+.01]
+    matches.sort(key=lambda s:(abs(s.extent.z_start-height),-s.extent.z_start))
+    if not matches:
+        raise ValueError(f'FDS 가스 단면이 없습니다: {species}, {height}m. 가스 출력을 추가해 재계산하세요.')
+    field=matches[0];values,coords=field.to_global(return_coordinates=True)
+    values=np.asarray(values,dtype=np.float32)
+    if (values.shape != (len(times),len(xs),len(ys)) or not np.allclose(field.times,times)
+            or not np.allclose(coords['x'],xs) or not np.allclose(coords['y'],ys)):
+        raise ValueError('FDS 가스 단면의 시간·좌표가 연기장과 일치하지 않습니다.')
+    if not np.isfinite(values).all() or np.any(values < -1e-6) or np.any(values > 1+1e-6):
+        raise ValueError('FDS 가스 체적분율은 유한한 0~1 값이어야 합니다.')
+    masked=field.to_global(masked=True,fill=np.nan)
+    valid=np.isfinite(masked[0])
+    if not np.array_equal(np.isfinite(masked),np.broadcast_to(valid,masked.shape)):
+        raise ValueError('시간에 따라 바뀌는 FDS 장애물은 가스 표본 추출에서 지원하지 않습니다.')
+    return np.clip(values,0,1),float(field.extent.z_start),valid
 
 
 def sha(path):
@@ -44,6 +82,7 @@ def export_fds(fds_dir: Path, output_dir: Path, config_path: Path, deck_path: Pa
     # A setup-check subdirectory may contain another SMV. Select the completed
     # run explicitly instead of letting the reader recursively choose one.
     sim = Simulation(str(fds_dir / f"{chid}.smv"))
+    cache_obstruction_masks(sim)
     arrays, times, xs, ys = {}, None, None, None
     for floor, height in settings["slice_height_m"].items():
         for key, quantity in (("k", "EXTINCTION COEFFICIENT"), ("temperature", "TEMPERATURE")):
@@ -78,6 +117,26 @@ def export_fds(fds_dir: Path, output_dir: Path, config_path: Path, deck_path: Pa
             if not np.allclose(field.times,times):raise ValueError('입체 연기 시각이 맞지 않습니다.')
             layers.append(np.maximum(np.asarray(values,dtype=np.float32)[:,::3,::2],0));zs.append(float(field.extent.z_start))
         arrays.update(volume_k=np.stack(layers,axis=-1),volume_x=xs[::3],volume_y=ys[::2],volume_z=np.array(zs))
+    # Keep gases at the original FDS x/y resolution, unlike display smoke.
+    gas_heights=sorted(set(settings.get('volume_slice_heights_m',[])) | set(requested_heights.values()))
+    gas_z=None;gas_valid=None
+    for key,species in GAS_SPECIES.items():
+        layers=[];zs=[];masks=[]
+        for height in gas_heights:
+            values,z,valid=_gas_slice(sim,species,height,settings,times,xs,ys)
+            layers.append(values);zs.append(z);masks.append(valid)
+        if gas_z is not None and zs != gas_z:
+            raise ValueError('FDS 가스별 표본 높이가 일치하지 않습니다.')
+        gas_z=zs
+        masks=np.stack(masks,axis=-1)
+        if gas_valid is not None and not np.array_equal(gas_valid,masks):
+            raise ValueError('FDS 가스별 장애물 마스크가 일치하지 않습니다.')
+        gas_valid=masks
+        arrays['gas_'+key]=np.stack(layers,axis=-1)
+        for floor,height in settings['slice_height_m'].items():
+            arrays[f'{floor}_{key}']=arrays['gas_'+key][...,zs.index(height)]
+    arrays['gas_z']=np.array(gas_z)
+    arrays['gas_valid']=gas_valid
     if times[-1] < settings.get("time_end_s", 240)-.1 or max(arrays[f+"_k"].max() for f in settings["slice_height_m"]) <= 0:
         raise ValueError("Missing full time coverage or smoke production")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -89,6 +148,10 @@ def export_fds(fds_dir: Path, output_dir: Path, config_path: Path, deck_path: Pa
                 "sampling": "nearest FDS spatial node, linear time interpolation",
                 "raw_files_sha256": {p.name: sha(p) for p in sorted(fds_dir.glob(f"{chid}*.sf"))},
                 "out_sha256": sha(fds_dir / f"{chid}.out")}
+    metadata['quantities'].update({key:species+' volume fraction [mol/mol]' for key,species in GAS_SPECIES.items()})
+    metadata['gas_sampling']={'xy':'nearest unobstructed FDS node within 1.5 mesh cells',
+                              'z':'linear between air levels; air-side sample at solid boundaries',
+                              'breathing_height_m':1.5,'species':GAS_SPECIES}
     if (fds_dir/'geometry_audit.json').exists():
         metadata['geometry_audit']=json.loads((fds_dir/'geometry_audit.json').read_text(encoding='utf8'))
     np.savez_compressed(output_dir / "fields.npz", times=times, x=xs, y=ys, **arrays)
@@ -138,6 +201,67 @@ class FireField:
         weight = 0 if high == low else (t-self.times[low])/(self.times[high]-self.times[low])
         return low, high, weight
 
+    def require_gases(self):
+        """가스가 없는 과거 파일을 독성 영향이 없는 파일로 오인하지 않는다."""
+        required=['gas_z','gas_valid',*(f'gas_{key}' for key in GAS_SPECIES),
+                  *(f'{floor}_{key}' for floor in self.meta['fire']['slice_height_m'] for key in GAS_SPECIES)]
+        if any(key not in self.data for key in required):
+            raise ValueError('FED 계산에 필요한 CO·CO₂·산소 농도장이 없습니다. 가스 출력을 포함해 FDS를 재계산·변환하세요.')
+        expected=(len(self.times),len(self.data['x']),len(self.data['y']),len(self.data['gas_z']))
+        if (not len(self.data['gas_z']) or not np.isfinite(self.data['gas_z']).all() or np.any(np.diff(self.data['gas_z'])<=0)
+                or self.data['gas_valid'].shape!=expected[1:]
+                or any(self.data['gas_'+key].shape!=expected for key in GAS_SPECIES)):
+            raise ValueError('FDS 가스 농도장의 격자·높이가 올바르지 않습니다.')
+        for key in GAS_SPECIES:
+            values=self.data['gas_'+key]
+            if not np.isfinite(values).all() or np.any(values<0) or np.any(values>1):
+                raise ValueError('FDS 가스 농도장은 유한한 0~1 체적분율이어야 합니다.')
+        self._gas_air_nodes={}
+
+    def _gas_node(self,x,y,iz):
+        xs,ys=self.data['x'],self.data['y']
+        ix,iy=int(np.argmin(abs(xs-x))),int(np.argmin(abs(ys-y)))
+        valid=self.data['gas_valid'][...,iz]
+        if valid[ix,iy]:return ix,iy
+        # Slice nodes inside solids often contain zero O2. Never interpret that
+        # as an asphyxiating atmosphere; use a nearby actual air sample or fail.
+        if not hasattr(self,'_gas_air_nodes'):self._gas_air_nodes={}
+        if iz not in self._gas_air_nodes:
+            nodes=np.argwhere(valid)
+            self._gas_air_nodes[iz]=(nodes,xs[nodes[:,0]],ys[nodes[:,1]])
+        nodes,nx,ny=self._gas_air_nodes[iz]
+        if not len(nodes):raise ValueError('해당 높이에 유효한 FDS 공기 표본이 없습니다.')
+        distances=(nx-x)**2+(ny-y)**2;i=int(np.argmin(distances))
+        if distances[i]>(1.5*self.meta.get('mesh_cell_m',self.meta['fire'].get('mesh_cell_m',1.)))**2:
+            raise ValueError('승객 근처에 유효한 FDS 공기 표본이 없습니다. 가스 격자와 형상을 확인하세요.')
+        return tuple(nodes[i])
+
+    def sample_gases_xyz(self,xyz,evacuation_time):
+        """실제 바닥 XYZ + 호흡 높이 1.5m. 계단에서도 층 단면으로 대체하지 않는다."""
+        lo,hi,w=self.indices(evacuation_time)
+        xs,ys,zs=self.data['x'],self.data['y'],self.data['gas_z']
+        x,y,z=xyz;z+=1.5
+        if not (xs[0]<=x<=xs[-1] and ys[0]<=y<=ys[-1] and zs[0]<=z<=zs[-1]):
+            raise ValueError('승객의 호흡 위치가 FDS 가스 농도장 범위를 벗어났습니다.')
+        high=min(int(np.searchsorted(zs,z,side='right')),len(zs)-1);low=max(0,high-1)
+        weight=0 if high==low else (z-zs[low])/(zs[high]-zs[low])
+        # Do not query a masked adjacent height when its interpolation weight is zero.
+        levels=[(low,1-weight)] if weight==0 else [(high,1.)] if weight==1 else [(low,1-weight),(high,weight)]
+        ix,iy=int(np.argmin(abs(xs-x))),int(np.argmin(abs(ys-y)))
+        air_levels=[(iz,zw) for iz,zw in levels if self.data['gas_valid'][ix,iy,iz]]
+        if air_levels:
+            # A ceiling/slab can occupy one endpoint even when the breathing
+            # position is in air. Never blend across that solid boundary.
+            total=sum(zw for _,zw in air_levels)
+            levels=[(iz,zw/total) for iz,zw in air_levels]
+        nodes=[(iz,zw,*self._gas_node(x,y,iz)) for iz,zw in levels]
+        result={}
+        for key,label,scale in [('co','co_ppm',1e6),('co2','co2_percent',100),('o2','o2_percent',100)]:
+            field=self.data['gas_'+key]
+            value=sum(zw*((1-w)*float(field[lo,ix,iy,iz])+w*float(field[hi,ix,iy,iz])) for iz,zw,ix,iy in nodes)
+            result[label]=value*scale
+        return result
+
     def sample(self, floor, pos, evacuation_time):
         frame = (type(evacuation_time), evacuation_time, type(self.offset), self.offset)
         if self._sample_frame != frame or self._sample_times is not self.times:
@@ -172,6 +296,10 @@ class FireField:
                 "extinction_per_m": round(k, 5), "temperature_c": round(values["temperature"], 2),
                 "visibility_m_capped_100": round(min(100, 3/max(k, 1e-9)), 2),
                 "speed_factor": max(0.1, min(1.0, 1-0.057*k/0.706))}
+        if all(f'{floor}_{key}' in self.data for key in GAS_SPECIES):
+            for key,label,scale in [('co','co_ppm',1e6),('co2','co2_percent',100),('o2','o2_percent',100)]:
+                field=self.data[f'{floor}_{key}']
+                reading[label]=float((1-w)*field[low,ix,iy]+w*field[high,ix,iy])*scale
         cells[node] = reading
         return reading.copy()
 

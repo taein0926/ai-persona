@@ -21,6 +21,7 @@ def station_signature():
         "integration/personal_space.py",
         "integration/private_strategy.py",
         "integration/fds_environment.py",
+        "integration/gas_exposure.py",
         "integration/fds_station_geometry.py",
         "persona/experimental_profile.py",
         "persona/full_profile.py",

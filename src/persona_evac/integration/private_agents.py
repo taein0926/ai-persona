@@ -235,7 +235,7 @@ class PrivateController:
     def tick(self,now):
         batch=[]
         for aid,r in self.runtime.items():
-            if r['phase']=='evacuated':continue
+            if r['phase']=='evacuated' or r.get('incapacitated'):continue
             mind=self.minds[aid];space=mind.space
             if r['phase']=='on_stairs':
                 if self.fire and now-space.last_sense>=SENSOR['refresh_s']-1e-6:
@@ -345,7 +345,8 @@ class PrivateController:
             blocked=r.get('navigation_blocked')
             cause=None
             if r['phase']!='evacuated':
-                if r['phase']=='on_stairs':cause='stair_or_landing_blocked'
+                if r.get('incapacitated'):cause='toxic_gas_exposure'
+                elif r['phase']=='on_stairs':cause='stair_or_landing_blocked'
                 elif blocked and mind.space.last_risk['smoke'] in {'dense','opaque'}:cause='smoke_limits_observed_navigation'
                 elif blocked and not mind.space.current_origin_links:cause='local_map_discretization_or_contact'
                 elif blocked:cause=blocked
@@ -360,7 +361,8 @@ class PrivateController:
                               'edge_first_seen':[[*k,*n,t] for (k,n),t in m['edge_first_seen'].items()]}
                            for a,m in mind.space.maps.items()},
                 personal_memory=mind.history+([outcome] if outcome else []),decision_count=mind.count,
-                ending_state={'phase':r['phase'],'area':r['area'],'floor':r['floor'],'position':list(r['pos']),
+                ending_state={'phase':'incapacitated' if r.get('incapacitated') else r['phase'],
+                              'physical_phase':r['phase'],'area':r['area'],'floor':r['floor'],'position':list(r['pos']),
                               'target':r['target'],'goal':list(r['goal']),'goal_is_portal':r.get('goal_is_portal'),
                               'entry_lane':r.get('entry_lane'),'navigation_blocked':blocked,
                               'perceived_hazard':mind.space.last_risk},

@@ -320,6 +320,8 @@ def simulate(source, config, request, decision_provider=None):
     wall_started = time.perf_counter()
     base = initialize_station(source, config, request)
     fire = FireField(config) if request.fire_mode == "fds" else None
+    from persona_evac.integration.gas_exposure import MODEL as GAS_MODEL, accumulate_exposure
+    if fire:fire.require_gases()
     c = base["scenario"]
     c["id"] = config["id"] + "-jps"
     c["movement"] = {
@@ -338,6 +340,7 @@ def simulate(source, config, request, decision_provider=None):
     }
     c["movement"]["minimum_navigation_gap_m"] = 2 * (RADIUS + 0.02)
     fast_threshold = source.get("provenance", {}).get("speed_fast_threshold_mps", 1.3)
+    c['movement']['gas_exposure']={'enabled':bool(fire),**GAS_MODEL}
     c["movement"]["overtaking_policy"] = {
         "fast_threshold_mps": fast_threshold,
         "threshold_basis": source.get("provenance", {}).get(
@@ -360,7 +363,8 @@ def simulate(source, config, request, decision_provider=None):
         "도면 근사 과정의 좁은 틈은 몸 폭 0.44m와 여유 0.04m를 기준으로 보행 영역에서 닫습니다. FDS의 공기 공간은 별도로 유지합니다.",
     ]
     c["assumptions"] += (
-        ["개화산역 형상으로 재계산한 FDS 연기·온도를 연결합니다. 화원·층고·환기는 가정입니다."]
+        ["개화산역 형상으로 재계산한 FDS 연기·온도·CO·CO₂·산소 농도를 연결합니다. 화원·층고·환기는 가정입니다.",
+         "정지·반응 전 대기·계단 이동 중에도 가스 노출 FED를 누적하고 FED≥1.0이면 대피 불능으로 처리합니다. 활동량은 모든 승객에 light work를 적용하며 사망·열 상해·HCN은 계산하지 않습니다."]
         if fire
         else ["화재 끄기 실행입니다. 연기·온도 영향은 적용하지 않습니다."]
     )
@@ -592,6 +596,8 @@ def simulate(source, config, request, decision_provider=None):
 
     for i, a in enumerate(agents):
         a.update(segments=[], stair_wait_s=0.0, evacuation_time_s=None, exit_id=None)
+        a.update(fed=0.,gas_exposure_until_s=0.,incapacitated_at_s=None,
+                 gas_exposure_history=[{'time_s':0.,'fed':0.}] if fire else [])
         a.update(distance_walked_m=0.0, decision_wait_s=0.0)
         a["experimental_profile"] = minds[a["agent_id"]].profile
         area = a["spawn"].get("area", "A" if i % 2 == 0 else "B")
@@ -701,7 +707,7 @@ def simulate(source, config, request, decision_provider=None):
                     guard=r.get('source_guard')
                     if guard and progress*length>=2*RADIUS+.08:
                         areas[guard['area']]['sim'].mark_agent_for_removal(guard['jid']);r.pop('source_guard')
-                    if (1-progress)*length<=1.15:
+                    if not r.get('incapacitated') and (1-progress)*length<=1.15:
                         dest=landing_for(s,r['stair_lane'])
                         if dest['floor']=='OUTSIDE' or r.get('landing_guard') or reserve_landing(r,dest):
                             passage.release_landing(r['agent']['agent_id'])
@@ -714,14 +720,14 @@ def simulate(source, config, request, decision_provider=None):
             for r in occupants:
                 lane = r["stair_lane"]
                 limit = fronts.get(lane, s["length_m"] + stair_gap) - stair_gap
-                r["stair_distance"] = min(limit, r["stair_distance"] + stair_speed * DT)
+                r["stair_distance"] = min(limit, r["stair_distance"] + (0 if r.get('incapacitated') else stair_speed * DT))
                 fronts[lane] = r["stair_distance"]
                 r["passage"]["motion"].append([now, r["stair_distance"] / s["length_m"]])
         if fire:
             fire.indices(now)
         for r in runtime.values():
             if (
-                r["phase"] != "on_stairs"
+                r.get('incapacitated') or r["phase"] != "on_stairs"
                 or (not native_passages[r['target']].ready(r['agent']['agent_id']) if native
                     else r["stair_distance"] < stairs[r["target"]]["length_m"] - 1e-08)
             ):
@@ -1027,6 +1033,31 @@ def simulate(source, config, request, decision_provider=None):
                 r["phase"],
                 r["target"] if r["phase"] == "queueing" else None,
             )
+        # Physics-wide exposure, independent of visibility, decisions and speed.
+        # A threshold crossing at this interval's end stops the next motion step.
+        if fire:
+            end_s=round(now+DT,8)
+            for aid,r in runtime.items():
+                if r['phase']=='evacuated':continue
+                if r['phase']=='on_stairs':
+                    if native:
+                        _,_,xyz=native_passages[r['target']].sample(aid)
+                    else:
+                        raw=fire.sample_stair(c,stairs[r['target']],
+                            {'from':r['stair_start'],'to':r['stair_destination']},
+                            r['stair_distance']/stairs[r['target']]['length_m'],now+DT/2)
+                        xyz=raw['physical_position_m']
+                else:
+                    xyz=[*r['pos'],floors[r['floor']]['elevation_m']]
+                reading=fire.sample_gases_xyz(xyz,now+DT/2)
+                r['last_gas_reading']=reading
+                if accumulate_exposure(r,reading,now,end_s):
+                    r['agent']['incapacitation']['physical_position_m']=list(xyz)
+                    if r['phase']=='on_stairs':
+                        r['agent']['incapacitation']['stair_id']=r['target']
+                        if native:native_passages[r['target']].incapacitate(aid)
+                    else:
+                        areas[r['area']]['sim'].agent(r['jid']).model.desired_speed=0.
         for event in pending_passes[:]:
             a, b = (runtime[event["passing_agent"]], runtime[event["passed_agent"]])
             if (
@@ -1079,6 +1110,11 @@ def simulate(source, config, request, decision_provider=None):
         key = (event["passing_agent"], event["passed_agent"], event["area"], event["target_stair"])
         unique_passes.setdefault(key, event)
     overtakes = list(unique_passes.values())
+    if fire:
+        for r in runtime.values():
+            a=r['agent'];until=a['gas_exposure_until_s']
+            if a['gas_exposure_history'][-1]['time_s']<until:
+                a['gas_exposure_history'].append({'time_s':until,'fed':a['fed'],**r['last_gas_reading']})
     private.finalize(now)
     decisions = private.decisions
     batches = private.decision_batches
@@ -1117,7 +1153,7 @@ def simulate(source, config, request, decision_provider=None):
         backend="jupedsim_avm_layered",
         backend_notice=c["name"]
         + (" · JuPedSim 층별·계단 보행 + 개찰구별 1인 통과 · " if native else " · JuPedSim 회피·추월 + 계단 시간·용량 연결 · ")
-        + ("FDS 연기·온도 연결" if fire else "화재 끄기 실행"),
+        + ("FDS 연기·온도·가스 노출 연결" if fire else "화재 끄기 실행"),
         scenario_hash=hashlib.sha256(canonical.encode()).hexdigest(),
         agents=agents,
         passages=passages,
@@ -1161,6 +1197,7 @@ def simulate(source, config, request, decision_provider=None):
             "count": len(agents),
             "all_evacuated": all((a["evacuation_time_s"] is not None for a in agents)),
             "completed_count": sum((a["evacuation_time_s"] is not None for a in agents)),
+            "incapacitated_count": sum(a['incapacitated_at_s'] is not None for a in agents),
             "total_time_s": now,
             "mean_wait_s": sum((a["stair_wait_s"] for a in agents)) / len(agents),
             "exit_split": {key: sum((a["exit_id"] == key for a in agents)) for key in c["exits"]},

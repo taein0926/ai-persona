@@ -146,6 +146,10 @@ def write_station_fds(config,path,audit_path=None):
     for height in config['fire']['volume_slice_heights_m']:
         if height not in config['fire']['slice_height_m'].values():
             lines.append(f"&SLCF PBZ={height}, QUANTITY='EXTINCTION COEFFICIENT' /")
+    # Volume fractions (mol/mol), including every breathing height on stairs.
+    for height in sorted(set(config['fire']['volume_slice_heights_m']) | set(config['fire']['slice_height_m'].values())):
+        for species in ('CARBON MONOXIDE','CARBON DIOXIDE','OXYGEN'):
+            lines.append(f"&SLCF PBZ={height}, QUANTITY='VOLUME FRACTION', SPEC_ID='{species}' /")
     lines.append('&TAIL /');path.parent.mkdir(parents=True,exist_ok=True)
     path.write_text('\n'.join(lines)+'\n',encoding='utf8')
     report={'mesh_cell_m':1,'cells':int(grid['solid'].size),'domain_x':[0,180],

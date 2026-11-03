@@ -96,7 +96,13 @@ def test_real_gaehwasan_fds_all_three_levels_and_source_match():
     assert field.times[-1]>=479.9
     assert field.data["F1_k"].max()>0
     assert field.data["F1_temperature"].max()>20
+    field.require_gases()
+    spawn=station()['spawn_points'][0]
+    air=field.sample_gases_xyz([spawn['x'],spawn['y'],0.],0.)
+    assert 20<air['o2_percent']<21 and air['co_ppm']>=0
     r=simulate_station(source(),station(),StationRequest(fire_mode="fds",duration_s=5))
     assert len(r['agents'])==10
     assert r["fire"]["enabled"]
     assert all(h["source"]=="fds" for h in r["hazard_history"])
+    assert r['scenario']['movement']['gas_exposure']['threshold']==1.
+    assert all(math.isfinite(a['fed']) and a['fed']>=0 and a['gas_exposure_until_s']==5 for a in r['agents'])

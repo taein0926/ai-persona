@@ -188,7 +188,7 @@ class NativePassage:
     """A real JuPedSim simulation per branch; no timed/FIFO position updates."""
     def __init__(self,connector,simulation_factory,parameter_factory,radius=.22):
         self.connector=connector;self.parameters=parameter_factory;self.radius=radius
-        self.branches=[];self.occupants={}
+        self.branches=[];self.occupants={};self.incapacitated=set()
         for path in connector['native_paths']:
             prepared=PreparedPath(path)
             length=prepared.length;width=connector['native_branch_width_m']
@@ -239,6 +239,7 @@ class NativePassage:
 
     def release_landing(self,agent_id):
         """Allow the final metre only after the receiving floor is reserved."""
+        if agent_id in self.incapacitated:return
         lane,jid=self.occupants[agent_id];spec=self.connector['native_lane_specs'][lane]
         branch=self.branches[spec['branch']];journey,stage=branch['final_stages'][lane]
         current=branch['sim'].agent(jid).stage_id
@@ -267,6 +268,7 @@ class NativePassage:
         return list(branch['sim'].agent(jid).position)
 
     def ready(self,agent_id):
+        if agent_id in self.incapacitated:return False
         lane,jid=self.occupants[agent_id];spec=self.connector['native_lane_specs'][lane]
         branch=self.branches[spec['branch']];length=branch['length']
         if branch.get('bent_path'):
@@ -276,13 +278,25 @@ class NativePassage:
         return math.hypot((1-progress)*length,lateral-spec['offset'])<=.09
 
     def release(self,agent_id):
+        self.incapacitated.discard(agent_id)
         lane,jid=self.occupants.pop(agent_id)
         branch=self.branches[self.connector['native_lane_specs'][lane]['branch']]
         branch['sim'].mark_agent_for_removal(jid)
 
+    def incapacitate(self,agent_id):
+        self.incapacitated.add(agent_id)
+        lane,jid=self.occupants[agent_id]
+        branch=self.branches[self.connector['native_lane_specs'][lane]['branch']]
+        branch['sim'].agent(jid).model.desired_speed=0.
+
     def advance(self,speed_factor=1):
-        for branch in self.branches:
+        stopped={(self.connector['native_lane_specs'][self.occupants[aid][0]]['branch'],self.occupants[aid][1])
+                 for aid in self.incapacitated}
+        for index,branch in enumerate(self.branches):
             for actor in branch['sim'].agents():
+                if (index,actor.id) in stopped:
+                    actor.model.desired_speed=0.
+                    continue
                 slope=branch['bent_path'].sample(actor.position)[2] if branch.get('bent_path') else 1
                 actor.model.desired_speed=self.connector['speed_mps']*speed_factor*slope
             branch['sim'].iterate()
