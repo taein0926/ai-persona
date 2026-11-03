@@ -400,6 +400,13 @@ async function load(payload) {
   $('behaviorRun').disabled = true;
   stop(); ($('run')||{}).disabled = true; $('message').className = ''; $('message').title=''; $('message').textContent = payload?'계산 중':'불러오는 중';
   try {
+    if(document.body.dataset.staticReplay==='true'){
+      if(payload)throw new Error('이 페이지는 저장된 결과를 재생합니다.');
+      showResults(await loadPublishedReplay());
+      $('message').textContent='저장 결과 재생 · 새 계산 없이 보기';
+      $('message').title='저장 당시의 이동·연기·판단 기록을 재생합니다.';
+      return;
+    }
     const station=document.body.dataset.station||'gaehwasan';
     const requestedRun=new URL(location.href).searchParams.get('result');
     const historyRun=!payload&&station==='gaehwasan'&&/^[0-9]{8}T[0-9]{6}$/.test(requestedRun||'')?requestedRun:null;
@@ -418,6 +425,7 @@ async function load(payload) {
 }
 $('stairsForm').addEventListener('submit', event => {
   event.preventDefault();
+  if(document.body.dataset.staticReplay==='true')return;
   const stairs = [...document.querySelectorAll('[data-stair-id]')].map(card => ({id: card.dataset.stairId, ...Object.fromEntries([...card.querySelectorAll('input')].map(input => [input.name, Number(input.value)]))}));
   load({stairs, behavior_mode: $('behaviorMode').value, profile_method: $('behaviorMode').value==='qwen'?'full_persona':'keyword_candidates', agent_count: Number($('agentCount').value), fire_mode: $('fireMode').value});
 });
@@ -435,6 +443,7 @@ $('fieldMode').addEventListener('change', () => {updateOpacityControls();state.l
 updateOpacityControls();
 initializeTraitFilters();
 async function followPendingResult() {
+  if(document.body.dataset.staticReplay==='true')return;
   const runId=new URL(location.href).searchParams.get('pending');
   if(!runId||!/^\d{8}T\d{6}$/.test(runId))return;
   try{

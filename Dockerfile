@@ -20,6 +20,7 @@ FROM base AS test
 RUN pip install --no-cache-dir '.[dev]'
 COPY tests ./tests
 COPY scripts ./scripts
+COPY pages_replay.js ./
 CMD ["python", "-m", "pytest"]
 
 # The upstream simulator is kept in its own image because its scientific stack

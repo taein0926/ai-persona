@@ -108,7 +108,7 @@ function appendKnowledgeRows(body,agent,p){
   appendSummaryRow(body,'아는 계단',`${knownStairs.length}개 · 층 연결 ${connections}개`,'agent-knowledge-row');
   appendSummaryRow(body,'연기·열감',info.local?perceivedText(info.local.perceived):'미관측','agent-knowledge-row');
   appendSummaryRow(body,'관측 시각',info.local?`${info.local.time_s.toFixed(1)}초`:'미관측','agent-knowledge-row');
-  appendSummaryRow(body,'주변 사람',info.peopleCurrent?`시야 안 ${info.view.people.length}명`:'미관측','agent-knowledge-row');
+  appendSummaryRow(body,'주변 사람',info.peopleCurrent?`시야 안 ${info.view.people_count??info.view.people.length}명`:'미관측','agent-knowledge-row');
 }
 function drawPrivateInspector(){
   const a=state.data.agents.find(x=>x.agent_id===state.selected);if(!a)return;
