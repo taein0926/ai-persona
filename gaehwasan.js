@@ -196,14 +196,14 @@ function drawStationView() {
     const p=position(agent,state.time),g=$(`agent-${agent.agent_id}`);
     g.style.display=p.status==='evacuated'?'none':'';
     g.setAttribute('transform',`translate(${p.pos.x},${p.pos.y})`);
-    const onStairs=p.status==='on_stairs',circle=g.querySelector('circle');
+    const onStairs=(p.physical_status||p.status)==='on_stairs',circle=g.querySelector('circle');
     circle.setAttribute('r',(onStairs?3.3:agent.agent_id===state.selected?7:5)*units);
     circle.setAttribute('cy',onStairs?-6*units:0);
     circle.setAttribute('stroke-width',(agent.agent_id===state.selected?2:1)*units);
     let body=g.querySelector('.person-body');
     if(!body)body=svg('path',{class:'person-body',fill:'none','stroke-linecap':'round'},'',g);
-    body.style.display=onStairs?'':'none';body.setAttribute('stroke',colors.on_stairs);body.setAttribute('stroke-width',2*units);
-    const step=Math.sin(state.time*8+agent.agent_id)*3;
+    body.style.display=onStairs?'':'none';body.setAttribute('stroke',p.status==='incapacitated'?colors.incapacitated:colors.on_stairs);body.setAttribute('stroke-width',2*units);
+    const step=p.status==='incapacitated'?0:Math.sin(state.time*8+agent.agent_id)*3;
     body.setAttribute('d',`M0 ${-2*units}V${4*units}M${-4*units} ${units}L0 ${-units}L${4*units} ${units}M0 ${4*units}L${(-2+step)*units} ${10*units}M0 ${4*units}L${(2-step)*units} ${10*units}`);
     const text=g.querySelector('text');text.setAttribute('font-size',11*units);text.setAttribute('y',-13*units);
     text.style.display=agent.agent_id===state.selected||view.zoom>=3?'':'none';

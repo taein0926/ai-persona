@@ -39,12 +39,12 @@ const fs=require('node:fs'),assert=require('node:assert/strict'),crypto=require(
     assert.equal(rejected.status(),409);assert.equal((await rejected.json()).detail.code,'station_result_outdated');
     await page.goto('http://localhost:8010/',{waitUntil:'domcontentloaded'});await ready();
     const initial=await snapshot();
-    assert(!initial.has_results&&!initial.summary_present&&initial.results_hidden&&initial.play_disabled&&!initial.calculate_disabled);
+    assert(!initial.has_results&&!initial.summary_present&&!initial.results_hidden&&initial.play_disabled&&!initial.calculate_disabled);
     assert.equal(initial.segments,0);assert.equal(initial.people,100);assert.equal(initial.status,'ready');assert(initial.enabled);
     assert.equal(initial.fire_mode,'fds');assert.equal(initial.behavior_mode,'qwen');assert.equal(initial.fds_status,'ready');
     assert(!/미리보기|이전 구조|보류 중/.test(initial.message));assert.equal(posts.length,0);
     await page.getByRole('button',{name:'페르소나 2 선택',exact:true}).click();
-    await page.getByRole('button',{name:'설정으로 계산',exact:true}).click();
+    await page.getByRole('button',{name:'시뮬레이션 계산',exact:true}).click();
     await page.getByRole('status').filter({hasText:'검증용 요청 차단'}).waitFor();
     assert.equal(posts.length,1);assert.equal(posts[0].agent_count,100);assert.equal(posts[0].fire_mode,'fds');assert.equal(posts[0].behavior_mode,'qwen');
     mode='missing';await page.reload();await ready();assert(!(await snapshot()).has_results);
@@ -59,7 +59,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict'),crypto=require(
     await page.getByRole('button',{name:'재생',exact:true}).click();
     await page.waitForFunction(()=>state.time>0);
     mode='actual';await page.reload();await ready();
-    const final=await snapshot();assert(!final.has_results&&final.segments===0&&final.results_hidden&&final.clock==='0.0초');
+    const final=await snapshot();assert(!final.has_results&&final.segments===0&&!final.results_hidden&&final.clock==='0.0초');
     assert.equal(posts.length,1);assert.deepEqual(errors,[]);
     assert(Object.entries(preserved).every(([p,digest])=>hash(p)===digest));
     await page.screenshot({path:`output/qa/station_ready/ready.png`,fullPage:true});

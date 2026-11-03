@@ -10,11 +10,12 @@ let renderer, scene, floorDepthScene, floorDepthRoot, structureScene, structureR
 const separation=2.5;
 let selectionScene,selectionBody,labelScene,labelRoot;
 let volumeOpacity=1;
-let homeBounds;
+// 승강장을 수평으로 두고 계단·출구가 위에 보이는 공통 시작 시점.
+const HOME_VIEW={target:[107.4,19,-21],offset:[-10,24,-145],zoom:1.94};
 let floors=[], fireMesh, fireColors, volumeMesh, volumeAlpha, fireKey='', selectedLabel, selectedRoute, lastSelected, overview=true, flames=[];
 const v = p => new THREE.Vector3(p.x, elevation(p.floor), -p.y);
 const elevation = id => (data.scenario.floors.find(f=>f.id===id)?.elevation_m ?? 8)*separation;
-const palette={pre_moving:0xcaa342,walking:0x168b74,waiting:0xb33e88,queueing:0xdd8620,on_stairs:0x3166c5};
+const palette={pre_moving:0xcaa342,walking:0x168b74,waiting:0xb33e88,queueing:0xdd8620,on_stairs:0x3166c5,incapacitated:0xb91c1c};
 const ray = new THREE.Raycaster(), pointer = new THREE.Vector2();
 const boxGeometry = new THREE.BoxGeometry(1,1,1);
 const material = color => new THREE.MeshStandardMaterial({color,roughness:.85,side:THREE.DoubleSide});
@@ -138,14 +139,52 @@ function routeFor(a) {
   if(selectedRoute){root.remove(selectedRoute);selectedRoute.traverse(n=>{n.geometry?.dispose();n.material?.dispose();});}
   selectedRoute=new THREE.Group();root.add(selectedRoute);if(!a)return;
   const mat=new THREE.LineDashedMaterial({color:0x235bc2,transparent:true,opacity:.65,dashSize:1,gapSize:.6,depthWrite:false});
-  let current=[],floor=null;
-  const flush=()=>{if(current.length>1){const l=line(current,mat,selectedRoute);l.computeLineDistances();}current=[];};
+  let current=[],times=[],floor=null;
+  const flush=()=>{
+    if(current.length>1){
+      const l=line(current,mat,selectedRoute);l.computeLineDistances();l.geometry.setDrawRange(0,0);
+      l.userData.trail={times,positions:l.geometry.attributes.position.array.slice(),
+        distances:l.geometry.attributes.lineDistance.array.slice(),partial:null};
+    }
+    current=[];times=[];
+  };
   for(const s of a.segments) {
     if(s.status==='on_stairs'){flush();floor=null;continue;}
-    if(s.from.floor!==floor){flush();floor=s.from.floor;current.push(v(s.from).add(new THREE.Vector3(0,.08,0)));}
-    current.push(v(s.to).add(new THREE.Vector3(0,.08,0)));
+    if(s.from.x===s.to.x&&s.from.y===s.to.y)continue;
+    if(s.from.floor!==floor){flush();floor=s.from.floor;}
+    if(!times.length||times.at(-1)!==s.start){
+      current.push(v(s.from).add(new THREE.Vector3(0,.08,0)));times.push(s.start);
+    }
+    current.push(v(s.to).add(new THREE.Vector3(0,.08,0)));times.push(s.end);
   }
   flush();
+}
+function updateRouteTime(time) {
+  if(!selectedRoute||selectedRoute.userData.time===time)return;
+  selectedRoute.userData.time=time;
+  for(const l of selectedRoute.children){
+    const trail=l.userData.trail;if(!trail)continue;
+    const {times,positions,distances}=trail,position=l.geometry.attributes.position,distance=l.geometry.attributes.lineDistance;
+    position.clearUpdateRanges();distance.clearUpdateRanges();
+    const setPoint=(index,x,y,z,d)=>{
+      position.setXYZ(index,x,y,z);position.addUpdateRange(index*3,3);
+      distance.setX(index,d);distance.addUpdateRange(index,1);
+    };
+    if(trail.partial!==null){
+      const i=trail.partial;setPoint(i,positions[i*3],positions[i*3+1],positions[i*3+2],distances[i]);trail.partial=null;
+    }
+    let lo=0,hi=times.length;
+    while(lo<hi){const mid=(lo+hi)>>1;if(times[mid]<=time)lo=mid+1;else hi=mid;}
+    let count=lo;
+    if(lo>0&&lo<times.length&&time>times[lo-1]){
+      const f=(time-times[lo-1])/(times[lo]-times[lo-1]),start=(lo-1)*3,end=lo*3;
+      setPoint(lo,...[0,1,2].map(k=>positions[start+k]+f*(positions[end+k]-positions[start+k])),
+        distances[lo-1]+f*(distances[lo]-distances[lo-1]));
+      trail.partial=lo;count++;
+    }
+    if(position.updateRanges.length){position.needsUpdate=true;distance.needsUpdate=true;}
+    l.geometry.setDrawRange(0,count>1?count:0);
+  }
 }
 function pointFor(a,time) {
   const p=position(a,time),s=p.segment;
@@ -208,11 +247,9 @@ function buildSelection() {
 }
 function fit() {
   overview=true;stationView.follow=false;
-  root.updateMatrixWorld(true);structureRoot.updateMatrixWorld(true);homeBounds??=new THREE.Box3().setFromObject(root).union(new THREE.Box3().setFromObject(structureRoot));const bounds=homeBounds,center=bounds.getCenter(new THREE.Vector3());
-  controls.target.copy(center);camera.position.copy(center).add(new THREE.Vector3(-55,85,145));camera.lookAt(center);camera.updateMatrixWorld(true);
-  const view=new THREE.Box3();
-  for(const x of [bounds.min.x,bounds.max.x])for(const y of [bounds.min.y,bounds.max.y])for(const z of [bounds.min.z,bounds.max.z])view.expandByPoint(new THREE.Vector3(x,y,z).applyMatrix4(camera.matrixWorldInverse));
-  const size=view.getSize(new THREE.Vector3());camera.zoom=Math.max(.5,1.06*Math.min((camera.right-camera.left)/size.x,(camera.top-camera.bottom)/size.y));
+  controls.target.fromArray(HOME_VIEW.target);
+  camera.position.copy(controls.target).add(new THREE.Vector3(...HOME_VIEW.offset));
+  camera.zoom=HOME_VIEW.zoom;camera.lookAt(controls.target);
   camera.updateProjectionMatrix();controls.update();render();
 }
 function resize() {
@@ -284,7 +321,6 @@ function fireUpdate(time) {
   }
 }
 function rebuild() {
-  homeBounds=null;
   if(labelRoot){labelScene.remove(labelRoot);labelRoot.traverse(n=>{n.material?.map?.dispose();n.material?.dispose();});}
   labelRoot=new THREE.Group();labelScene.add(labelRoot);
   if(root) {scene.remove(root);root.traverse(n=>{if(n.geometry&&n.geometry!==boxGeometry)n.geometry.dispose();if(n.material?.map)n.material.map.dispose();if(n.material&&n.material!==stairMaterial&&n.material!==railMaterial)n.material.dispose();});}
@@ -397,6 +433,7 @@ api.update=(result,time,selected)=>{
   selectedLabel.visible=!!q?.point;
   if(q?.point)selectedLabel.position.copy(q.point).add(new THREE.Vector3(0,2.5,0));
   if(lastSelected!==selected){const old=selectedLabel;selectionScene.remove(old);old.material.map.dispose();old.material.dispose();selectedLabel=label(`#${selected}`,'#21252c','#ffd56b');selectionScene.add(selectedLabel);lastSelected=selected;selectedLabel.visible=!!q?.point;if(q?.point)selectedLabel.position.copy(q.point).add(new THREE.Vector3(0,2.5,0));routeFor(active);}
+  updateRouteTime(time);
   if(stationView.follow&&q?.point) {
     const delta=q.point.clone().sub(controls.target);controls.target.add(delta);camera.position.add(delta);controls.update();
   } else if(stationView.follow&&q?.status==='evacuated')fit();

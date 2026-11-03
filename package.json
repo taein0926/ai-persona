@@ -2,7 +2,8 @@
   "name": "persona-evac-ui-checks",
   "private": true,
   "scripts": {
-    "test:ui": "node scripts/verify_private_ui.cjs && node scripts/verify_simulation_views.cjs"
+    "test:ui": "node scripts/verify_private_ui.cjs && node scripts/verify_simulation_views.cjs",
+    "test:ui:filters": "node scripts/verify_trait_filters.cjs"
   },
   "devDependencies": {
     "playwright": "1.62.1"

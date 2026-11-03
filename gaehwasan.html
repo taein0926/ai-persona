@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>개화산역 · 페르소나 대피 시뮬레이션</title>
-  <link rel="stylesheet" href="/gaehwasan.css?v=20261030-settings-3">
+  <link rel="stylesheet" href="/gaehwasan.css?v=20261103-decision-seek-1">
   <script type="importmap">{"imports":{"three":"/vendor/three/three.module.js"}}</script>
 </head>
 <body data-station="gaehwasan">
@@ -13,18 +13,24 @@
       <section class="settings-block"><form id="stairsForm">
         <label for="agentCount">대피 인원</label><select id="agentCount"><option>10</option><option>30</option><option>60</option><option selected>100</option></select>
         <label for="fireMode">화재 시나리오</label><select id="fireMode"><option value="fds">5호선 열차 화재</option><option value="off">없음</option></select>
-        <label for="behaviorMode">상황 판단</label><select id="behaviorMode"><option value="qwen">로컬 Gemma 4 E2B</option><option value="off">기본 이동</option></select><button id="behaviorRun" type="submit" disabled>설정으로 계산</button>
+        <label for="behaviorMode">상황 판단</label><select id="behaviorMode"><option value="qwen">로컬 Gemma 4 E2B</option><option value="off">기본 이동</option></select><button id="behaviorRun" type="submit" disabled>시뮬레이션 계산</button>
       </form></section>
       <div id="message" role="status" aria-live="polite">불러오는 중</div>
       <section class="display-settings settings-block" aria-label="화면 표시"><div class="display-settings-body"><label for="fieldMode">표시 항목</label><select id="fieldMode"><option value="volume">입체 연기</option><option value="smoke">평면 연기</option><option value="temperature">온도</option><option value="none">숨기기</option></select><div id="smokeOpacityControls"><label for="smokeOpacity">연기 불투명도 <output id="smokeOpacityValue" for="smokeOpacity">100%</output></label><input id="smokeOpacity" type="range" min="0" max="1" step="0.05" value="1"></div></div></section>
-      <section class="metrics" id="metrics" aria-label="최종 결과 요약" hidden></section>
-      <section class="agents-panel"><div class="section-title agent-list-heading"><div class="agent-heading-label">에이전트 <span id="agentListCount">100명</span></div><select id="agentSort" aria-label="에이전트 정렬" title="번호순 또는 보행 속도 기준 정렬"><option value="number">번호순</option><option value="speed_desc">속도 빠른순</option><option value="speed_asc">속도 느린순</option></select></div><div class="persona-list" id="personaList"></div></section>
+      <section class="metrics" id="metrics" aria-label="최종 결과 요약"><h3>최종 결과</h3><div class="result-grid"><div class="result-card"><small>대피 완료</small><strong>—</strong><em>명</em></div><div class="result-card"><small>미완료</small><strong>—</strong><em>명</em></div><div class="result-card"><small>1번 출구</small><strong>—</strong><em>명</em></div><div class="result-card"><small>2번 출구</small><strong>—</strong><em>명</em></div></div></section>
+      <section class="agents-panel">
+        <div class="section-title agent-list-heading"><div class="agent-heading-label">에이전트 <span id="agentListCount">100명</span></div><div class="agent-list-actions"><button id="toggleTraitFilters" type="button" popovertarget="agentTraitFilters" aria-label="성향 필터" title="성향 필터"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4Z"/></svg></button><select id="agentSort" aria-label="에이전트 정렬" title="번호순 또는 평균 보행 속도 기준 정렬"><option value="number">번호순</option><option value="speed_desc">속도 빠른순</option><option value="speed_asc">속도 느린순</option></select></div></div>
+        <div id="activeTraitFilters" class="trait-filter-tags" aria-label="적용된 성향 조건" hidden></div>
+        <div id="agentTraitFilters" class="trait-filter-popover" popover="auto" aria-label="성향 필터"><div id="traitFilterOptions"></div></div>
+        <p id="agentFilterEmpty" class="agent-filter-empty" hidden>조건에 맞는 에이전트가 없습니다.</p>
+        <div class="persona-list" id="personaList"></div>
+      </section>
     </aside>
     <section class="map-panel" aria-label="대피 시뮬레이션 뷰포트">
-      <div class="map-header"><strong>개화산역 대피 시뮬레이션</strong><div class="legend"><span class="dot moving"></span>이동 <span class="dot overtaking"></span>추월 <span class="dot slowed"></span>정지·서행</div></div>
+      <div class="map-header"><strong>개화산역 대피 시뮬레이션</strong><div class="legend"><span class="dot moving"></span>이동 <span class="dot overtaking"></span>추월 <span class="dot slowed"></span>정지·서행·양보 <span class="dot visibility-blocked"></span>시야 차단 <span class="dot" style="background:#b91c1c"></span>가스 대피 불능</div></div>
       <div class="map-viewport"><div id="map3d" role="group" aria-label="개화산역 입체 지도. 사람을 클릭하면 선택하고 따라갑니다."></div><svg id="map" viewBox="0 0 1100 1050" role="group" aria-label="승강장과 대합실, 계단을 연결한 역사 지도"></svg><div class="world-overview"><svg id="stationMiniMap" viewBox="0 0 1100 1050" role="img" aria-label="전체 역사와 현재 카메라 위치"></svg></div><div class="map-tools"><button id="zoomFit" aria-label="처음 시점으로 돌아가기">처음 시점 ↺</button></div></div>
-      <div class="playback"><button id="play" disabled aria-label="재생">▶</button><button id="reset" disabled aria-label="처음으로">↺</button><time id="clock">0.0초</time><input id="time" type="range" aria-label="재생 시각" min="0" max="270" step="any" value="0" disabled><span id="endTime">—</span><select id="speed" aria-label="재생 속도"><option value="1">1×</option><option value="2" selected>2×</option><option value="5">5×</option></select></div>
-      <div class="live-stats" id="liveStats"></div>
+      <div class="playback"><button id="play" disabled aria-label="재생">▶</button><button id="reset" disabled aria-label="처음으로">↺</button><time id="clock">0.0초</time><input id="time" type="range" aria-label="재생 시각" min="0" max="270" step="any" value="0" disabled><span id="endTime">—</span><select id="speed" aria-label="재생 속도"><option value="1">1×</option><option value="2" selected>2×</option><option value="5">5×</option><option value="10">10×</option></select></div>
+      <div class="live-stats" id="liveStats"><span>대피 전 <b>—명</b></span><span>대피중 <b>—명</b></span><span>대피 완료 <b>—명</b></span><span>대피 불능 <b>—명</b></span></div>
     </section>
     <aside class="inspector" id="personaInspector" aria-label="선택한 에이전트 상세">
       <h2 class="panel-title">선택 에이전트 <span id="selectedAgentBadge">#1</span></h2>
@@ -32,6 +38,6 @@
       </div>
     </aside>
   </main>
-  <script src="/gaehwasan.js?v=20261029-layout-14"></script><script src="/private_inspector.js?v=20261030-summary-table-4"></script><script src="/station_viewer.js?v=20261030-settings-3"></script><script type="module" src="/gaehwasan3d.js?v=20261029-layout-14"></script>
+  <script src="/gaehwasan.js?v=20261102-gas-1"></script><script src="/private_inspector.js?v=20261103-mean-speed-label-1"></script><script src="/station_viewer.js?v=20261103-mean-speed-label-1"></script><script type="module" src="/gaehwasan3d.js?v=20261103-home-view-1"></script>
 </body>
 </html>

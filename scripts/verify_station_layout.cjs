@@ -144,7 +144,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),crypto=require(
     assert.deepEqual(report.vestibules,['E_1','E_2']);
     assert.deepEqual(report.exits.map(s=>s.form),['bent_stair','vestibule_passage']);
     assert(report.exits.every(s=>s.render_mode==='floor_only'));
-    assert(report.play_disabled&&!report.calculation_disabled&&report.results_hidden);assert.deepEqual(errors,[]);
+    assert(report.play_disabled&&!report.calculation_disabled&&!report.results_hidden);assert.deepEqual(errors,[]);
     await page.screenshot({path:`${output}/overview.png`,fullPage:true});
     const rendered=await page.evaluate(()=>station3D.__inspectStair());
     assert(rendered['H_E:lower']>0&&rendered['H_E:upper']>0&&rendered['H_E:landing']===1);
