@@ -5,6 +5,12 @@ __pycache__/
 .venv/
 node_modules/
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
 output/
 data/cache/
 data/raw/
