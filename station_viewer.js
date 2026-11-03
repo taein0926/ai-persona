@@ -348,6 +348,17 @@ function sortAgentList(){
   $('agentFilterEmpty').hidden=matchingCount>0;
   list.scrollTop=0;
 }
+function calculationSettings() {
+  const stairs = [...document.querySelectorAll('[data-stair-id]')].map(card => ({id: card.dataset.stairId, ...Object.fromEntries([...card.querySelectorAll('input')].map(input => [input.name, Number(input.value)]))}));
+  return {stairs, behavior_mode: $('behaviorMode').value, profile_method: $('behaviorMode').value==='qwen'?'full_persona':'keyword_candidates', agent_count: Number($('agentCount').value), fire_mode: $('fireMode').value};
+}
+function updateCalculationMessage() {
+  state.dirty = JSON.stringify(calculationSettings()) !== state.resultSettings;
+  const savedReplay = ['stored_replay','static_replay'].includes(state.data?.artifact_status?.mode);
+  $('message').className = '';
+  $('message').textContent = state.dirty?'설정 변경됨 · 다시 계산해 주세요':state.hasResults?'선택한 설정으로 계산된 결과':$('behaviorRun').disabled?'계산 사용 불가':'계산 준비';
+  $('message').title = state.dirty?'':savedReplay?'선택한 설정으로 계산해 저장한 결과입니다. 저장된 이동·연기·판단 기록을 재생합니다.':state.data?.backend_notice||'';
+}
 function showResults(data) {
   playbackFrame=null;state.liveStatsKey=null;resetPrivatePlayback(data);
   stop(); state.data = data; state.hasResults=!!data.summary; state.time = 0;state.inspectorKey=null;
@@ -390,8 +401,8 @@ function showResults(data) {
   for (const id of ['play', 'reset', 'time', 'download']) if($(id)) $(id).disabled = !state.hasResults;
   for(const id of ['run','behaviorRun'])if($(id))$(id).disabled=data.calculation_available===false||data.scenario.simulation_enabled===false;
   $('behaviorRun').textContent='시뮬레이션 계산';
-  $('message').className = ''; $('message').textContent = data.artifact_status?.mode==='stored_replay'?'저장 결과 재생 · 현재 계산 설정과 다름':state.hasResults?'계산 완료':$('behaviorRun').disabled?'계산 사용 불가':'계산 준비';
-  $('message').title=data.artifact_status?.mode==='stored_replay'?'저장 당시의 지도·이동·연기·개인별 기록을 그대로 재생합니다. 현재 설정이나 모델로 다시 계산하지 않습니다.':data.backend_notice||'';
+  state.resultSettings = JSON.stringify(calculationSettings());
+  updateCalculationMessage();
   const visible=data.agents.filter(matchesAgentTraits);
   const selected=visible.find(a=>a.agent_id===state.selected)||visible[0]||data.agents.find(a=>a.agent_id===state.selected)||data.agents[0];
   state.dirty = false; buildMap(); select(selected.agent_id);
@@ -403,8 +414,6 @@ async function load(payload) {
     if(document.body.dataset.staticReplay==='true'){
       if(payload)throw new Error('이 페이지는 저장된 결과를 재생합니다.');
       showResults(await loadPublishedReplay());
-      $('message').textContent='저장 결과 재생 · 새 계산 없이 보기';
-      $('message').title='저장 당시의 이동·연기·판단 기록을 재생합니다.';
       return;
     }
     const station=document.body.dataset.station||'gaehwasan';
@@ -426,10 +435,9 @@ async function load(payload) {
 $('stairsForm').addEventListener('submit', event => {
   event.preventDefault();
   if(document.body.dataset.staticReplay==='true')return;
-  const stairs = [...document.querySelectorAll('[data-stair-id]')].map(card => ({id: card.dataset.stairId, ...Object.fromEntries([...card.querySelectorAll('input')].map(input => [input.name, Number(input.value)]))}));
-  load({stairs, behavior_mode: $('behaviorMode').value, profile_method: $('behaviorMode').value==='qwen'?'full_persona':'keyword_candidates', agent_count: Number($('agentCount').value), fire_mode: $('fireMode').value});
+  load(calculationSettings());
 });
-$('stairsForm').addEventListener('input', () => {state.dirty = true; $('message').className=''; $('message').textContent = '설정 변경됨 · 다시 계산해 주세요';$('message').title='';});
+$('stairsForm').addEventListener('input', updateCalculationMessage);
 $('agentSort')?.addEventListener('change',sortAgentList);
 window.addEventListener('resize',()=>fitDecisionLog($('decisionLog')));
 $('play').addEventListener('click', () => {if (state.playing) return stop(); if (!state.hasResults) return; if (state.time >= (state.data.replay_duration_s||state.data.summary.total_time_s)) state.time = 0; if(state.data.scenario.drawing) stationPlaybackStarted(); state.playing = true; state.last = null; $('play').textContent = '❚❚'; $('play').setAttribute('aria-label', '일시정지'); state.frame = requestAnimationFrame(animate);});
