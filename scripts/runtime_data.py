@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import shutil
 import tempfile
@@ -21,10 +23,12 @@ FIXED_FILES = (
     "data/processed/julich_features.metadata.json",
     "output/gaehwasan/persona_source.json",
     "output/gaehwasan/results.json",
+    "output/gaehwasan/private_verification/activation.json",
     "output/fds/gaehwasan/derived/fields.npz",
     "output/fds/gaehwasan/derived/metadata.json",
     "output/latest/results.json",
     "output/latest/assignment_manifest.parquet",
+    "output/t-junction-mvp-openai/seed-1/pyfds_results.json",
 )
 CACHE_DIRS = (
     "output/gaehwasan/private_profile_cache",
@@ -37,6 +41,66 @@ CONFIG_FILES = (
     "configs/agents/private_agent_policy.json",
 )
 ARCHIVE = "simulation-data.zip"
+PART_BYTES = 40 * 1024 * 1024
+SOURCE_FALLBACKS = {
+    "output/latest/results.json": "output/t-junction-mvp-openai/seed-1/pyfds_results.json",
+    "output/latest/assignment_manifest.parquet": "output/t-junction-mvp-openai/seed-1/assignment_manifest.parquet",
+}
+
+
+def packing_source(root, name):
+    path = destination(root, name)
+    if not path.exists() and name in SOURCE_FALLBACKS:
+        return destination(root, SOURCE_FALLBACKS[name])
+    return path
+
+
+def publish(source, target):
+    # Windows 전용 임시 폴더의 권한을 최종 파일로 옮기지 않는다.
+    with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            with source.open("rb") as content:
+                shutil.copyfileobj(content, stream)
+        except BaseException:
+            stream.close()
+            temporary.unlink(missing_ok=True)
+            raise
+    temporary.replace(target)
+
+
+@contextmanager
+def open_archive(bundle, manifest):
+    metadata = manifest["archive"]
+    if manifest["version"] == 1:
+        archive = bundle / ARCHIVE
+        if archive.stat().st_size != metadata["size"] or sha(archive) != metadata["sha256"]:
+            raise ValueError("실행 데이터 압축 파일의 크기 또는 해시가 다릅니다.")
+        yield archive
+        return
+    parts = metadata.get("parts", [])
+    if not parts or [item["path"] for item in parts] != [
+        f"{ARCHIVE}.part{index:03d}" for index in range(1, len(parts) + 1)
+    ]:
+        raise ValueError("실행 데이터 압축 파일의 분할 목록이 올바르지 않습니다.")
+    with tempfile.TemporaryFile() as archive:
+        digest = hashlib.sha256()
+        for item in parts:
+            path = bundle / item["path"]
+            if path.stat().st_size != item["size"]:
+                raise ValueError(f"실행 데이터 압축 파일 조각의 크기가 다릅니다: {item['path']}")
+            part_digest = hashlib.sha256()
+            with path.open("rb") as source:
+                while block := source.read(1024 * 1024):
+                    part_digest.update(block)
+                    digest.update(block)
+                    archive.write(block)
+            if part_digest.hexdigest() != item["sha256"]:
+                raise ValueError(f"실행 데이터 압축 파일 조각의 해시가 다릅니다: {item['path']}")
+        if archive.tell() != metadata["size"] or digest.hexdigest() != metadata["sha256"]:
+            raise ValueError("실행 데이터 압축 파일 전체의 크기 또는 해시가 다릅니다.")
+        archive.seek(0)
+        yield archive
 
 
 def sha(path):
@@ -58,6 +122,13 @@ def destination(root, name):
     path = root.joinpath(*relative.parts)
     if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError(f"프로젝트 밖을 가리키는 데이터 경로: {name}")
+    if os.name == "nt":
+        # 긴 캐시 파일명도 Windows의 기본 260자 제한에 걸리지 않게 한다.
+        absolute = str(path.absolute())
+        if not absolute.startswith("\\\\?\\"):
+            absolute = ("\\\\?\\UNC\\" + absolute[2:] if absolute.startswith("\\\\")
+                        else "\\\\?\\" + absolute)
+        return Path(absolute)
     return path
 
 
@@ -67,7 +138,7 @@ def pack(root):
         names.extend(p.relative_to(root).as_posix() for p in (root / directory).rglob("*.json"))
     names = sorted(set(names))
     for name in names:
-        if not allowed(name) or not destination(root, name).is_file():
+        if not allowed(name) or not packing_source(root, name).is_file():
             raise ValueError(f"필수 데이터가 없거나 포함할 수 없습니다: {name}")
     bundle = root / "runtime"
     bundle.mkdir(exist_ok=True)
@@ -76,7 +147,7 @@ def pack(root):
         archive = Path(temporary) / ARCHIVE
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zipped:
             for name in names:
-                data = destination(root, name).read_bytes()
+                data = packing_source(root, name).read_bytes()
                 info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = 0o100644 << 16
@@ -84,8 +155,15 @@ def pack(root):
                 files.append({"path": name, "size": len(data),
                               "sha256": hashlib.sha256(data).hexdigest()})
         population = json.loads((root / "output/gaehwasan/persona_source.json").read_text(encoding="utf-8"))
+        parts = []
+        with archive.open("rb") as stream:
+            while block := stream.read(PART_BYTES):
+                name = f"{ARCHIVE}.part{len(parts) + 1:03d}"
+                part = Path(temporary) / name
+                part.write_bytes(block)
+                parts.append({"path": name, "size": len(block), "sha256": sha(part)})
         manifest = {
-            "version": 1,
+            "version": 2,
             "archive": {"path": ARCHIVE, "size": archive.stat().st_size, "sha256": sha(archive)},
             "model": population.get("provenance", {}).get("model"),
             "prepared_model_digest": population.get("provenance", {}).get("mapping_settings", {}).get("model_digest"),
@@ -94,35 +172,27 @@ def pack(root):
             "configs": {name: sha(root / name) for name in CONFIG_FILES},
             "files": files,
         }
+        manifest["archive"]["parts"] = parts
         manifest_path = Path(temporary) / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
                                  encoding="utf-8")
-        # Windows의 전용 임시 폴더 권한이 배포 파일에 남지 않도록
-        # 최종 폴더의 권한을 상속하는 형제 임시 파일을 통해 게시한다.
-        for source in (archive, manifest_path):
-            with tempfile.NamedTemporaryFile(dir=bundle, delete=False) as stream:
-                published = Path(stream.name)
-                try:
-                    with source.open("rb") as content:
-                        shutil.copyfileobj(content, stream)
-                except BaseException:
-                    stream.close()
-                    published.unlink(missing_ok=True)
-                    raise
-            published.replace(bundle / source.name)
+        for source in [*(Path(temporary) / item["path"] for item in parts), manifest_path]:
+            publish(source, bundle / source.name)
+        # 새 묶음 게시 후, 이 도구가 생성한 이전 조각과 단일 파일만 정리한다.
+        current = {item["path"] for item in parts}
+        for old in [bundle / ARCHIVE, *bundle.glob(f"{ARCHIVE}.part[0-9][0-9][0-9]")]:
+            if old.name not in current:
+                old.unlink(missing_ok=True)
     return {"status": "데이터 묶음 생성 완료", "files": len(files),
-            "archive_bytes": manifest["archive"]["size"],
+            "archive_bytes": manifest["archive"]["size"], "parts": len(parts),
             "unpacked_bytes": sum(item["size"] for item in files)}
 
 
 def restore(root, install=False):
     bundle = root / "runtime"
     manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("version") != 1 or manifest.get("archive", {}).get("path") != ARCHIVE:
+    if manifest.get("version") not in (1, 2) or manifest.get("archive", {}).get("path") != ARCHIVE:
         raise ValueError("지원하지 않는 실행 데이터 형식입니다.")
-    archive = bundle / ARCHIVE
-    if archive.stat().st_size != manifest["archive"]["size"] or sha(archive) != manifest["archive"]["sha256"]:
-        raise ValueError("실행 데이터 압축 파일의 크기 또는 해시가 다릅니다.")
     for name in CONFIG_FILES:
         if sha(root / name) != manifest["configs"].get(name):
             raise ValueError(f"고정된 입력 설정이 다릅니다: {name}")
@@ -131,7 +201,7 @@ def restore(root, install=False):
     if len(expected) != len(entries) or not set(FIXED_FILES).issubset(expected):
         raise ValueError("실행 데이터 목록이 중복되었거나 필수 파일이 없습니다.")
     missing = []
-    with zipfile.ZipFile(archive) as zipped:
+    with open_archive(bundle, manifest) as archive, zipfile.ZipFile(archive) as zipped:
         if len(zipped.namelist()) != len(expected) or set(zipped.namelist()) != set(expected):
             raise ValueError("압축 파일과 실행 데이터 목록이 다릅니다.")
         # 모든 경로·크기·해시·기존 파일을 먼저 검사하고 나서 복원한다.

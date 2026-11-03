@@ -49,5 +49,5 @@ def test_population_rejects_cloud_provider_before_inference(tmp_path, monkeypatc
 
 def test_legacy_result_provenance_remains_readable():
     from persona_evac.schemas import ExperimentResults
-    payload = json.loads(Path('output/latest/results.json').read_text(encoding='utf-8'))
+    payload = json.loads(Path('output/t-junction-mvp-openai/seed-1/pyfds_results.json').read_text(encoding='utf-8'))
     ExperimentResults.model_validate(payload)
