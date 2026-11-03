@@ -32,8 +32,8 @@ def test_common_prompt_and_cache_key_preserve_existing_ollama_artifacts(tmp_path
     import hashlib
     from persona_evac.llm.common import MAPPING_PROMPT, JsonCache
     assert hashlib.sha256(MAPPING_PROMPT.encode()).hexdigest() == "c07371d49d019f1b17979cbf4aad2db0533b1685842fa6f0aab93ee6f6772284"
-    key = JsonCache(tmp_path).key(
+    cache_digest = JsonCache(tmp_path).key(
         profile=PersonaProfile(uuid="p", age=35), scenario_context={"scenario": "test"},
         provider="ollama", model="qwen3:4b", settings={"system_prompt": MAPPING_PROMPT},
     )
-    assert key == "c29ff2168f8b3e88a15153cfcfd6c2be0df364944fc946d7dc3ca1ba99841982"
+    assert cache_digest == "c29ff2168f8b3e88a15153cfcfd6c2be0df364944fc946d7dc3ca1ba99841982"
