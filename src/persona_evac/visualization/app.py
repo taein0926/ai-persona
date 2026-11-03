@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import hashlib
+import re
 import threading
 from collections import OrderedDict
 from copy import deepcopy
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.gzip import GZipMiddleware
 
 from persona_evac.integration.pyfds_adapter import inspect_pyfds_checkout
@@ -107,7 +108,23 @@ def health() -> dict[str, object]:
 
 
 @app.get("/")
-def index() -> FileResponse:
+def index(result: str | None = None):
+    if result is None:
+        try:
+            preference=OUTPUT/'gaehwasan/display_selection.json'
+            selected=_read_json(preference) if preference.exists() else {}
+            run_id=selected.get('result_id','');follow=selected.get('follow_run_id','')
+            query=''
+            if re.fullmatch(r'[0-9]{8}T[0-9]{6}',follow):
+                activation=OUTPUT/'gaehwasan/private_verification/activation.json'
+                active=_read_json(activation) if activation.exists() else {}
+                if active.get('run_id')==follow:run_id=follow
+                else:query=f'&pending={follow}'
+            if (re.fullmatch(r'[0-9]{8}T[0-9]{6}',run_id)
+                    and (OUTPUT/'simulation_runs'/run_id/'results.json').is_file()):
+                return RedirectResponse(f'/?result={run_id}{query}',status_code=307)
+        except (OSError,ValueError,TypeError):
+            pass
     return FileResponse(ROOT / "gaehwasan.html")
 
 
@@ -132,6 +149,82 @@ def gaehwasan_results() -> dict:
         'policy_matches':True,'automatic_recomputation':False}}
 
 
+@app.get('/api/gaehwasan/replay')
+def gaehwasan_saved_replay() -> dict:
+    """활성화 당시 검증한 저장 결과만 읽는다. 현재 계산 조건으로 바꾸지 않는다."""
+    artifact = OUTPUT/'gaehwasan/results.json'
+    if not artifact.exists():
+        raise HTTPException(status_code=404, detail={
+            'code':'station_result_missing','message':'재생할 저장 결과가 없습니다.'})
+    version = _file_version(artifact)
+    result = _read_json(artifact)
+    activation_path = OUTPUT/'gaehwasan/private_verification/activation.json'
+    try:
+        activation = _read_json(activation_path)
+        with artifact.open('rb') as stream:
+            digest = hashlib.file_digest(stream,'sha256').hexdigest()
+    except (OSError, ValueError):
+        raise HTTPException(status_code=409, detail={
+            'code':'station_replay_unverified','message':'저장 결과의 활성화 검증 기록을 확인할 수 없습니다.'}) from None
+    if version != _file_version(artifact):
+        raise HTTPException(status_code=503,detail='저장 결과가 갱신 중입니다. 잠시 후 다시 조회하세요.')
+    if (not isinstance(activation,dict) or not isinstance(result,dict)
+            or activation.get('artifact_sha256') != digest
+            or not result.get('implementation_sha256')
+            or activation.get('implementation_sha256') != result['implementation_sha256']):
+        raise HTTPException(status_code=409, detail={
+            'code':'station_replay_unverified','message':'저장 결과와 활성화 검증 기록이 일치하지 않습니다.'})
+    scenario = result.get('scenario')
+    agents = result.get('agents')
+    summary = result.get('summary')
+    if (not isinstance(scenario,dict) or not scenario.get('floors')
+            or not isinstance(agents,list) or not agents
+            or not isinstance(summary,dict) or summary.get('count') != len(agents)):
+        raise HTTPException(status_code=422, detail={
+            'code':'station_replay_incomplete','message':'저장 결과에 재생할 지도·인원·결과가 없습니다.'})
+    config = ROOT/'configs/scenarios/gaehwasan.json'
+    return {**result,'artifact_status':{
+        'mode':'stored_replay','snapshot_verified':True,'artifact_sha256':digest,
+        'implementation_matches':result['implementation_sha256'] == _station_signature(),
+        'config_matches':result.get('input_config_sha256') == hashlib.sha256(config.read_bytes()).hexdigest(),
+        'policy_matches':policy_matches(result),'automatic_recomputation':False}}
+
+
+@app.get('/api/gaehwasan/history/{run_id}')
+def gaehwasan_history(run_id: str) -> dict:
+    """지정한 저장 실행만 재생한다. 현재 활성 파일과 실행 중인 계산은 바꾸지 않는다."""
+    if not re.fullmatch(r'[0-9]{8}T[0-9]{6}',run_id):
+        raise HTTPException(status_code=404,detail='저장 실행을 찾을 수 없습니다.')
+    directory=OUTPUT/'simulation_runs'/run_id;artifact=directory/'results.json';report_path=directory/'report.json'
+    if not artifact.is_file() or not report_path.is_file():
+        raise HTTPException(status_code=404,detail='완료된 저장 결과가 없습니다.')
+    version=_file_version(artifact)
+    result=_read_json(artifact);report=_read_json(report_path)
+    with artifact.open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
+    if version!=_file_version(artifact):
+        raise HTTPException(status_code=503,detail='저장 결과가 갱신 중입니다.')
+    if digest!=report.get('result_sha256') or result.get('summary')!=report.get('summary'):
+        raise HTTPException(status_code=409,detail='저장 결과와 완료 기록이 일치하지 않습니다.')
+    config=ROOT/'configs/scenarios/gaehwasan.json'
+    return {**result,'artifact_status':{
+        'mode':'stored_replay','snapshot_verified':True,'artifact_sha256':digest,'history_run_id':run_id,
+        'implementation_matches':result.get('implementation_sha256')==_station_signature(),
+        'config_matches':config.exists() and result.get('input_config_sha256')==hashlib.sha256(config.read_bytes()).hexdigest(),
+        'policy_matches':policy_matches(result),'automatic_recomputation':False}}
+
+
+@app.get('/api/gaehwasan/activation')
+def gaehwasan_activation() -> dict:
+    """현재 화면에 연결한 별도 계산의 반영 정보만 읽는다. 계산을 시작하지 않는다."""
+    pending=OUTPUT/'gaehwasan/pending_run.json'
+    activation=OUTPUT/'gaehwasan/private_verification/activation.json'
+    try:run=_read_json(pending) if pending.exists() else None
+    except (OSError,ValueError):run=None
+    try:active=_read_json(activation) if activation.exists() else {}
+    except (OSError,ValueError):active={}
+    return {'run':run,'active_artifact_sha256':active.get('artifact_sha256')}
+
+
 @app.get('/api/gaehwasan/setup')
 def gaehwasan_setup(agent_count: Annotated[int,Query(ge=10,le=100)] = 100) -> dict:
     """Return real simulation inputs, without constructing a result or advancing time."""
@@ -153,7 +246,8 @@ def gaehwasan_setup(agent_count: Annotated[int,Query(ge=10,le=100)] = 100) -> di
                 and meta.get('deck_sha256') == sha(ROOT/'configs/fds/gaehwasan.fds')
                 and (meta_path.parent/'fields.npz').exists()):
             setup['fire_precomputation'] = {'status':'ready','duration_s':meta['time_end_s'],
-                'mesh_cell_m':meta['mesh_cell_m']}
+                'mesh_cell_m':meta['mesh_cell_m'],
+                'gas_exposure_ready':all(key in meta.get('quantities',{}) for key in ('co','co2','o2'))}
     return setup
 
 
