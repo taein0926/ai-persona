@@ -1,3 +1,5 @@
+name: ai-persona-evac
+
 services:
   bootstrap:
     profiles: ["setup"]
@@ -7,6 +9,7 @@ services:
       - ./:/workspace
     command: ["python", "scripts/runtime_data.py", "install"]
   app:
+    image: ai-app:latest
     build:
       context: .
       target: base
@@ -23,6 +26,7 @@ services:
       - ./:/app:ro
       - ./output:/app/output
   test:
+    image: ai-test:latest
     build:
       context: .
       target: test

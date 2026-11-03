@@ -19,7 +19,8 @@ CMD ["uvicorn", "persona_evac.visualization.app:app", "--host", "0.0.0.0", "--po
 FROM base AS test
 RUN pip install --no-cache-dir '.[dev]'
 COPY tests ./tests
-CMD ["pytest"]
+COPY scripts ./scripts
+CMD ["python", "-m", "pytest"]
 
 # The upstream simulator is kept in its own image because its scientific stack
 # is substantially heavier than the API/UI runtime.
