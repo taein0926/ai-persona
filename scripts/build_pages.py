@@ -8,6 +8,8 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import tempfile
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENT_FIELDS = (
@@ -73,8 +75,10 @@ def write(root,name,content):
     else:target.write_text(content,encoding='utf-8',newline='\n')
 
 
-def build(root,output,source_path=None,activation_path=None):
+def build(root,output,source_path=None,activation_path=None,source_revision=None):
     if output.resolve()==root.resolve():raise ValueError('소스 저장소에 직접 배포 파일을 덮어쓸 수 없습니다.')
+    if source_revision and not re.fullmatch(r'[0-9a-f]{40}',source_revision):
+        raise ValueError('배포 소스 커밋 형식이 올바르지 않습니다.')
     if output.exists():
         for path in output.rglob('*'):
             name=path.relative_to(output)
@@ -124,15 +128,50 @@ def build(root,output,source_path=None,activation_path=None):
             text+='\nbody[data-static-replay] #behaviorRun{display:none}\n'
         write(output,name,text)
     write(output,'.nojekyll','')
-    write(output,'build-info.json',json.dumps({'source_artifact_sha256':sha(raw),
-          'summary':source['summary'],'read_only':True,'external_services':False},ensure_ascii=False,indent=2)+'\n')
+    info={'source_artifact_sha256':sha(raw),'summary':source['summary'],
+          'read_only':True,'external_services':False}
+    if source_revision:
+        info['source_revision']=source_revision
+    write(output,'build-info.json',json.dumps(info,ensure_ascii=False,indent=2)+'\n')
     return manifest
+
+
+def build_from_runtime(root,output,source_revision=None):
+    """추론 없이 Git에 고정된 묶음에서 검증된 결과 두 파일만 읽는다."""
+    if __package__:
+        from .runtime_data import ARCHIVE, open_archive
+    else:
+        from runtime_data import ARCHIVE, open_archive
+    bundle=root/'runtime'
+    manifest=json.loads((bundle/'manifest.json').read_text(encoding='utf-8'))
+    if manifest.get('version') not in (1,2) or manifest.get('archive',{}).get('path')!=ARCHIVE:
+        raise ValueError('지원하지 않는 실행 데이터 형식입니다.')
+    names=('output/gaehwasan/results.json','output/gaehwasan/private_verification/activation.json')
+    entries={item['path']:item for item in manifest['files']}
+    if len(entries)!=len(manifest['files']) or not set(names).issubset(entries):
+        raise ValueError('실행 데이터 목록이 중복되었거나 저장 결과가 없습니다.')
+    with open_archive(bundle,manifest) as archive, zipfile.ZipFile(archive) as zipped:
+        if len(zipped.namelist())!=len(entries) or set(zipped.namelist())!=set(entries):
+            raise ValueError('압축 파일과 실행 데이터 목록이 다릅니다.')
+        with tempfile.TemporaryDirectory() as temporary:
+            paths=[]
+            for index,name in enumerate(names):
+                if zipped.getinfo(name).file_size!=entries[name]['size']:
+                    raise ValueError('저장 결과의 압축 항목 크기가 다릅니다.')
+                raw=zipped.read(name)
+                if sha(raw)!=entries[name]['sha256']:
+                    raise ValueError('저장 결과의 압축 항목 해시가 다릅니다.')
+                path=Path(temporary)/f'{index}.json';path.write_bytes(raw);paths.append(path)
+            return build(root,output,*paths,source_revision=source_revision)
 
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path,default=ROOT/'public')
+    parser.add_argument('--from-runtime',action='store_true',help='Git의 필수 실행 데이터에서 생성')
+    parser.add_argument('--source-revision',help='배포 소스의 Git 커밋 SHA')
     args=parser.parse_args()
-    info=build(ROOT,args.output.resolve())
+    info=(build_from_runtime(ROOT,args.output.resolve(),args.source_revision) if args.from_runtime else
+          build(ROOT,args.output.resolve(),source_revision=args.source_revision))
     print(json.dumps({'status':'정적 재생 사이트 생성 완료','summary':info['summary'],
                       'download_mb':round(info['compressed_bytes']/1e6,2)},ensure_ascii=False))

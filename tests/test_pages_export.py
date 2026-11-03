@@ -5,10 +5,12 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import zipfile
 
 import pytest
 
-from scripts.build_pages import ASSETS, PUBLISHED_FILES, build, project_replay
+from scripts.build_pages import ASSETS, PUBLISHED_FILES, build, build_from_runtime, project_replay
+from scripts.check_pages_security import source_files, validate_public_files
 
 REPO=Path(__file__).resolve().parents[1]
 
@@ -73,3 +75,52 @@ def test_unverified_result_and_unexpected_public_file_are_rejected(tmp_path):
     assert not out.exists()
     out.mkdir();(out/'.env').write_text('must not publish')
     with pytest.raises(ValueError,match='허용하지 않은 파일'):build(root,out,source,activation)
+
+
+def runtime_fixture(tmp_path):
+    root,source,activation=fixture(tmp_path)
+    bundle=root/'runtime';bundle.mkdir()
+    entries=[]
+    with zipfile.ZipFile(bundle/'simulation-data.zip','w') as archive:
+        for name,path in (('output/gaehwasan/results.json',source),
+                          ('output/gaehwasan/private_verification/activation.json',activation)):
+            raw=path.read_bytes();archive.writestr(name,raw)
+            entries.append({'path':name,'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
+    raw=(bundle/'simulation-data.zip').read_bytes()
+    manifest={'version':1,'archive':{'path':'simulation-data.zip','size':len(raw),
+                                   'sha256':hashlib.sha256(raw).hexdigest()},'files':entries}
+    (bundle/'manifest.json').write_text(json.dumps(manifest))
+    return root,bundle,manifest
+
+
+def test_runtime_build_needs_no_local_outputs_and_identifies_source_commit(tmp_path):
+    root,bundle,_=runtime_fixture(tmp_path);out=tmp_path/'site'
+    revision='a'*40
+    info=build_from_runtime(root,out,revision)
+    assert not (root/'output').exists()
+    assert json.loads(gzip.decompress((out/'data/replay.json.gz').read_bytes()))['summary']==recorded()['summary']
+    assert json.loads((out/'build-info.json').read_text())['source_revision']==revision
+    assert info['summary']==recorded()['summary']
+    validate_public_files(out)
+    (out/'.env').write_text('must not publish')
+    with pytest.raises(ValueError,match='허용 목록'):validate_public_files(out)
+
+
+@pytest.mark.parametrize('corrupt_archive',[False,True])
+def test_runtime_tampering_stops_build_before_publication(tmp_path,corrupt_archive):
+    root,bundle,manifest=runtime_fixture(tmp_path);out=tmp_path/'site'
+    if corrupt_archive:
+        with (bundle/'simulation-data.zip').open('ab') as stream:stream.write(b'changed')
+    else:
+        manifest['files'][0]['sha256']='0'*64
+        (bundle/'manifest.json').write_text(json.dumps(manifest))
+    with pytest.raises(ValueError,match='크기|해시'):build_from_runtime(root,out)
+    assert not out.exists()
+
+
+def test_tracked_secret_file_is_rejected_even_before_scanner_runs(tmp_path,monkeypatch):
+    class Files:
+        stdout=b'100644 '+b'a'*40+b' 0\t.env\0'
+    monkeypatch.setattr('scripts.check_pages_security.subprocess.run',lambda *a,**kw:Files())
+    (tmp_path/'.env').write_text('local setting')
+    with pytest.raises(ValueError,match='개인키'):list(source_files(tmp_path))
