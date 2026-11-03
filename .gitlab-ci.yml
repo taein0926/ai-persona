@@ -20,4 +20,5 @@ pages:
   pages:
     publish: public
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    # 공개 페이지 배포는 GitHub Actions에서만 수행합니다.
+    - when: never
